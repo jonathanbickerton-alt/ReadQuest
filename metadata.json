@@ -1,0 +1,7 @@
+{
+  "name": "ReadQuest",
+  "description": "An AI-powered reading assistant for dyslexic children featuring focus reading, live transcription scoring, and interactive storytelling.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

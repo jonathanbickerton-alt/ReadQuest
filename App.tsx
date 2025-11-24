@@ -1,0 +1,565 @@
+import React, { useState, useEffect } from 'react';
+import { AppSettings, Character, ReadingSession, StoryChapter, GameState } from './types';
+import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateImageTweaks, editCharacterImage, generateSceneImage } from './services/gemini';
+import FocusReader from './components/FocusReader';
+import ParentDashboard from './components/ParentDashboard';
+import SettingsPanel from './components/SettingsPanel';
+import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight } from 'lucide-react';
+
+export default function App() {
+  // --- State ---
+  const [view, setView] = useState<'onboarding' | 'character-review' | 'reading' | 'parents'>('onboarding');
+  const [settings, setSettings] = useState<AppSettings>({
+    isDyslexicFont: false,
+    colorTheme: 'default',
+    fontSize: 'large'
+  });
+  
+  // Story State
+  const [character, setCharacter] = useState<Character | null>(null);
+  const [storyHistory, setStoryHistory] = useState<StoryChapter[]>([]);
+  const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
+  
+  // Creation Flow State
+  const [pendingChapter, setPendingChapter] = useState<StoryChapter | null>(null);
+  const [imageTweaks, setImageTweaks] = useState<string[]>([]);
+  const [isRegeneratingImage, setIsRegeneratingImage] = useState(false);
+  const [isWritingStory, setIsWritingStory] = useState(false);
+  const [generatedWordCount, setGeneratedWordCount] = useState(0);
+  const [loadingSceneUrl, setLoadingSceneUrl] = useState<string | null>(null);
+  
+  // Progress State
+  const [readingHistory, setReadingHistory] = useState<ReadingSession[]>([]);
+
+  // UI State
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [charNameInput, setCharNameInput] = useState('');
+  const [charDescInput, setCharDescInput] = useState('');
+  const [hasSaveGame, setHasSaveGame] = useState(false);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+
+  // --- Effects ---
+  useEffect(() => {
+    try {
+        const saved = localStorage.getItem('readquest_save');
+        if (saved) setHasSaveGame(true);
+    } catch (e) {
+        console.warn("Local storage access denied or full", e);
+    }
+  }, []);
+
+  // --- Handlers ---
+
+  const handleSaveGame = () => {
+    if (!character || storyHistory.length === 0) return;
+    
+    const gameState: GameState = {
+        character,
+        storyHistory,
+        currentChapterIndex,
+        readingHistory,
+        generatedWordCount
+    };
+
+    try {
+        localStorage.setItem('readquest_save', JSON.stringify(gameState));
+        setHasSaveGame(true);
+        setShowSaveConfirm(true);
+        setTimeout(() => setShowSaveConfirm(false), 2000);
+    } catch (e) {
+        console.error("Save failed", e);
+        setErrorMessage("Could not save game. Browser storage might be full.");
+    }
+  };
+
+  const handleLoadGame = () => {
+    try {
+        const saved = localStorage.getItem('readquest_save');
+        if (!saved) return;
+        
+        const gameState: GameState = JSON.parse(saved);
+        
+        setCharacter(gameState.character);
+        setStoryHistory(gameState.storyHistory);
+        setCurrentChapterIndex(gameState.currentChapterIndex);
+        setReadingHistory(gameState.readingHistory);
+        setGeneratedWordCount(gameState.generatedWordCount);
+        
+        setView('reading');
+    } catch (e) {
+        console.error("Failed to load game", e);
+        setErrorMessage("Could not load saved game.");
+    }
+  };
+
+  const handleDeleteSave = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm("Are you sure you want to delete your saved story? This cannot be undone.")) {
+        localStorage.removeItem('readquest_save');
+        setHasSaveGame(false);
+    }
+  };
+
+  const handleStartCreation = async () => {
+    if (!charNameInput || !charDescInput) return;
+    setIsLoading(true);
+    setErrorMessage(null);
+    setPendingChapter(null);
+    setGeneratedWordCount(0);
+
+    try {
+      // Step 1: Generate Image & Tweaks
+      const [imgUrl, tweaks] = await Promise.all([
+        generateCharacterImage(charDescInput),
+        generateImageTweaks(charDescInput)
+      ]);
+
+      setCharacter({
+        name: charNameInput,
+        description: charDescInput,
+        imageUrl: imgUrl
+      });
+      setImageTweaks(tweaks);
+      
+      // Move to Review View
+      setView('character-review');
+      setIsLoading(false);
+
+      // Step 2: Start Writing Story in Background
+      setIsWritingStory(true);
+      
+      // Pass the progress callback to update word count state
+      generateStoryStart(charNameInput, charDescInput, (count) => {
+        setGeneratedWordCount(count);
+      })
+        .then(chapter => {
+          setPendingChapter(chapter);
+        })
+        .catch(e => {
+          console.error("Story gen failed", e);
+          setErrorMessage("Failed to write the story. Please try again.");
+        })
+        .finally(() => {
+          setIsWritingStory(false);
+        });
+
+    } catch (e: any) {
+      console.error("Setup failed", e);
+      setErrorMessage(e.message || "Something went wrong starting the adventure. Please try again.");
+      setIsLoading(false);
+    }
+  };
+
+  const handleApplyTweak = async (tweak: string) => {
+    if (!character) return;
+    setIsRegeneratingImage(true);
+    try {
+      const newImg = await editCharacterImage(character.imageUrl, tweak);
+      setCharacter({
+        ...character,
+        imageUrl: newImg
+      });
+    } catch (e: any) {
+      setErrorMessage("Failed to edit image: " + e.message);
+    } finally {
+      setIsRegeneratingImage(false);
+    }
+  };
+
+  const handleConfirmAdventure = () => {
+    if (pendingChapter) {
+        setStoryHistory([pendingChapter]);
+        setCurrentChapterIndex(0);
+        setView('reading');
+    }
+  };
+
+  const handleFinishChapter = async (transcript: string, duration: number) => {
+    setIsLoading(true);
+    const currentChapter = storyHistory[currentChapterIndex];
+
+    try {
+      const stats = await calculateReadingScore(currentChapter.content || "", transcript, duration);
+      
+      const newSession: ReadingSession = {
+        id: Date.now().toString(),
+        date: new Date().toISOString(),
+        chapterTitle: currentChapter.title,
+        wordCount: (currentChapter.content || "").split(' ').length,
+        durationSeconds: duration,
+        stats
+      };
+      
+      setReadingHistory(prev => [...prev, newSession]);
+      handleSaveGame(); // Auto-save after chapter completion
+    } catch (e) {
+      console.error("Scoring failed", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMakeChoice = async (choice: string) => {
+    setIsLoading(true);
+    setGeneratedWordCount(0);
+    setLoadingSceneUrl(null);
+
+    const previousContext = storyHistory[currentChapterIndex].content;
+
+    try {
+        // Start generating the scene summary image immediately (visual context)
+        generateSceneImage(previousContext).then(url => setLoadingSceneUrl(url));
+
+        // Start writing the next chapter stream
+        const nextChapter = await generateNextChapter(
+            previousContext + "\nUser Choice: " + choice, 
+            choice, 
+            (count) => setGeneratedWordCount(count)
+        );
+
+        setStoryHistory(prev => [...prev, nextChapter]);
+        setCurrentChapterIndex(prev => prev + 1);
+        handleSaveGame(); // Auto-save on new chapter
+    } catch (e) {
+        console.error("Next chapter failed", e);
+        setErrorMessage("Could not load the next chapter.");
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  // --- Render Helpers ---
+
+  const renderOnboarding = () => (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] max-w-4xl mx-auto p-4">
+      <div className="text-center mb-10">
+        <h1 className="text-5xl font-extrabold text-indigo-900 mb-4 tracking-tight">ReadQuest</h1>
+        <p className="text-xl text-indigo-600">Your magical reading adventure begins here.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full">
+        {/* New Game Card */}
+        <div className="bg-white p-8 rounded-3xl shadow-xl border border-indigo-50 hover:shadow-2xl transition-all">
+            <h2 className="text-2xl font-bold mb-6 text-gray-800 flex items-center gap-2">
+                <Wand2 className="text-purple-500 w-6 h-6"/> New Adventure
+            </h2>
+            
+            {errorMessage && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 flex items-start gap-3 text-sm">
+                    <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div>{errorMessage}</div>
+                </div>
+            )}
+
+            {isLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center space-y-6">
+                <div className="relative w-full max-w-xs h-4 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="absolute top-0 left-0 h-full bg-gradient-to-r from-indigo-500 to-purple-500 animate-[pulse_2s_infinite] w-2/3" />
+                </div>
+                
+                <div className="text-center">
+                    <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mx-auto mb-3" />
+                    <h3 className="text-lg font-bold text-gray-800">Painting your hero...</h3>
+                </div>
+            </div>
+            ) : (
+            <div className="space-y-6">
+                <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">Character Name</label>
+                <input 
+                    value={charNameInput}
+                    onChange={(e) => setCharNameInput(e.target.value)}
+                    placeholder="e.g. Leo the Lionheart"
+                    className="w-full p-4 rounded-xl border-2 border-indigo-100 focus:border-indigo-500 focus:ring-0 text-lg transition-all"
+                />
+                </div>
+
+                <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">Description</label>
+                <textarea 
+                    value={charDescInput}
+                    onChange={(e) => setCharDescInput(e.target.value)}
+                    placeholder="Describe your hero..."
+                    className="w-full p-4 rounded-xl border-2 border-indigo-100 focus:border-indigo-500 focus:ring-0 text-lg h-32 transition-all resize-none"
+                />
+                
+                <div className="flex flex-wrap gap-2 mt-3">
+                    <button onClick={() => setCharDescInput("A space explorer with a robotic dog")} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full hover:bg-indigo-100">Space Explorer</button>
+                    <button onClick={() => setCharDescInput("A forest elf who talks to dragons")} className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full hover:bg-green-100">Forest Elf</button>
+                </div>
+                </div>
+
+                <button 
+                onClick={handleStartCreation}
+                disabled={!charNameInput || !charDescInput}
+                className="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold text-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                >
+                Create <ArrowRight className="w-5 h-5"/>
+                </button>
+            </div>
+            )}
+        </div>
+
+        {/* Continue Game Card */}
+        <div className={`bg-white p-8 rounded-3xl shadow-xl border border-indigo-50 flex flex-col justify-between relative overflow-hidden ${!hasSaveGame ? 'opacity-50 pointer-events-none' : 'hover:shadow-2xl transition-all'}`}>
+            {!hasSaveGame && (
+                <div className="absolute inset-0 bg-gray-50/50 flex items-center justify-center z-10 backdrop-blur-[1px]">
+                    <p className="text-gray-400 font-bold bg-white px-4 py-2 rounded-full shadow-sm">No saved game found</p>
+                </div>
+            )}
+            
+            <div>
+                <h2 className="text-2xl font-bold mb-4 text-gray-800 flex items-center gap-2">
+                    <Book className="text-green-500 w-6 h-6"/> Continue Journey
+                </h2>
+                <p className="text-gray-600 mb-6">Pick up exactly where you left off in your last adventure.</p>
+            </div>
+
+            <div className="flex gap-4">
+                <button 
+                    onClick={handleLoadGame}
+                    disabled={!hasSaveGame}
+                    className="flex-1 py-4 bg-green-500 text-white rounded-xl font-bold text-xl shadow-lg hover:bg-green-600 transition-all flex items-center justify-center gap-3"
+                >
+                    Continue <Play fill="currentColor" className="w-5 h-5"/>
+                </button>
+                {hasSaveGame && (
+                    <button 
+                        onClick={handleDeleteSave}
+                        className="px-4 py-4 bg-red-50 text-red-500 rounded-xl font-bold border border-red-100 hover:bg-red-100 transition-all"
+                        title="Delete Save"
+                    >
+                        <Trash2 className="w-6 h-6"/>
+                    </button>
+                )}
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderCharacterReview = () => {
+    // Progress capped at 100% (1000 words target)
+    const progressPercent = Math.min(100, Math.floor((generatedWordCount / 1000) * 100));
+    
+    return (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] max-w-4xl mx-auto p-4">
+      <div className="bg-white p-8 rounded-3xl shadow-xl w-full border border-indigo-50">
+        <h2 className="text-3xl font-bold mb-8 text-gray-800 text-center">Meet {character?.name}!</h2>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+          <div className="relative group mx-auto w-full flex justify-center">
+             <div className="relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden shadow-2xl border-4 border-white ring-4 ring-indigo-50">
+                <img 
+                    src={character?.imageUrl} 
+                    alt={character?.name} 
+                    className={`w-full h-full object-cover transition-opacity duration-300 ${isRegeneratingImage ? 'opacity-50 blur-sm' : 'opacity-100'}`} 
+                />
+                {isRegeneratingImage && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
+                    </div>
+                )}
+             </div>
+             
+             <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 w-64 z-10">
+                {isWritingStory ? (
+                   <div className="bg-white px-4 py-3 rounded-xl shadow-lg border border-indigo-100">
+                     <div className="flex items-center gap-2 mb-2">
+                        <Loader2 className="w-4 h-4 text-indigo-500 animate-spin"/>
+                        <span className="text-xs font-bold text-indigo-700">Writing Story... ({generatedWordCount} words)</span>
+                     </div>
+                     <div className="w-full h-2 bg-indigo-100 rounded-full overflow-hidden">
+                        <div 
+                            className="h-full bg-indigo-500 transition-all duration-300 ease-out"
+                            style={{ width: `${progressPercent}%` }}
+                        />
+                     </div>
+                   </div>
+                ) : (
+                   <div className="bg-white px-4 py-2 rounded-full shadow-lg border border-green-100 flex items-center justify-center gap-2 whitespace-nowrap">
+                     <Check className="w-4 h-4 text-green-500"/>
+                     <span className="text-sm font-bold text-green-700">Story Ready!</span>
+                   </div>
+                )}
+             </div>
+          </div>
+
+          <div className="space-y-6 mt-8 md:mt-0">
+             <div className="bg-indigo-50 p-6 rounded-2xl">
+                <h3 className="font-bold text-indigo-900 mb-3 flex items-center gap-2">
+                    <Sparkles className="w-5 h-5"/> Perfect the look
+                </h3>
+                <p className="text-sm text-indigo-700 mb-4">Click an option below to adjust the image, or just start reading if you love it!</p>
+                
+                <div className="space-y-2">
+                    {imageTweaks.map((tweak, i) => (
+                        <button
+                            key={i}
+                            onClick={() => handleApplyTweak(tweak)}
+                            disabled={isRegeneratingImage}
+                            className="w-full text-left p-3 bg-white hover:bg-indigo-100 border border-indigo-100 rounded-xl transition-colors flex items-center gap-3 text-sm font-medium text-gray-700 disabled:opacity-50"
+                        >
+                            <Edit2 className="w-4 h-4 text-indigo-400"/>
+                            {tweak}
+                        </button>
+                    ))}
+                </div>
+             </div>
+
+             <button 
+                onClick={handleConfirmAdventure}
+                disabled={!pendingChapter || isRegeneratingImage}
+                className="w-full py-4 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:bg-gray-300 disabled:cursor-not-allowed disabled:transform-none"
+             >
+                {isWritingStory ? 'Writing Chapter 1...' : 'Start Adventure!'} <Play fill="currentColor" />
+             </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )};
+
+  const isReadingView = view === 'reading' && !!character;
+
+  return (
+    // Fixed inset-0 ensures we take exactly the viewport size, preventing body scrollbar
+    <div className={`fixed inset-0 flex flex-col transition-colors duration-500 ${settings.colorTheme === 'default' ? 'bg-gray-50' : settings.colorTheme === 'yellow' ? 'bg-[#fdf6e3]' : settings.colorTheme === 'blue' ? 'bg-[#e0f7fa]' : 'bg-[#fce4ec]'}`}>
+      
+      {/* Navigation - Fixed height */}
+      <nav className="flex-none h-16 bg-white/80 backdrop-blur-md border-b border-gray-200 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full">
+          <div className="flex justify-between items-center h-full">
+            <div className="flex items-center cursor-pointer" onClick={() => setView('onboarding')}>
+              <Book className="w-8 h-8 text-indigo-600 mr-2" />
+              <span className="font-extrabold text-xl text-gray-800">ReadQuest</span>
+            </div>
+            
+            <div className="flex items-center space-x-4">
+              {isReadingView && (
+                  <button
+                    onClick={handleSaveGame}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-bold text-indigo-600 hover:bg-indigo-50 transition-colors mr-2 relative"
+                  >
+                    <Save className="w-4 h-4" />
+                    <span className="hidden sm:inline">Save</span>
+                    {showSaveConfirm && (
+                        <span className="absolute top-10 left-1/2 -translate-x-1/2 bg-green-500 text-white text-xs px-2 py-1 rounded shadow-lg animate-fade-in-up whitespace-nowrap">
+                            Saved!
+                        </span>
+                    )}
+                  </button>
+              )}
+
+              <button 
+                onClick={() => setView('reading')} 
+                disabled={storyHistory.length === 0}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${view === 'reading' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                <Book className="w-4 h-4" /> Story
+              </button>
+              <button 
+                onClick={() => setView('parents')} 
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${view === 'parents' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:text-gray-900'}`}
+              >
+                <Layout className="w-4 h-4" /> Parents
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content - Flex Grow takes remaining height */}
+      {/* Logic: If reading view, disable outer scroll so internal FocusReader handles it.
+                 If other views, allow outer scroll. */}
+      <main className={`flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative
+          ${isReadingView ? 'overflow-hidden py-4' : 'overflow-y-auto py-8 custom-scrollbar'}
+      `}>
+        {view === 'onboarding' && renderOnboarding()}
+        
+        {view === 'character-review' && renderCharacterReview()}
+
+        {view === 'reading' && character && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full">
+            
+            {/* Sidebar - Scrollable independently if needed */}
+            <div className="lg:col-span-3 space-y-6 overflow-y-auto h-full hidden lg:block pb-4 pr-2">
+              <div className="bg-white p-4 rounded-2xl shadow-lg border border-indigo-100 text-center">
+                <img src={character.imageUrl} alt={character.name} className="w-32 h-32 rounded-full mx-auto mb-3 object-cover border-4 border-indigo-100 shadow-sm" />
+                <h3 className="font-bold text-lg text-gray-800">{character.name}</h3>
+                <p className="text-xs text-gray-500 mt-1 line-clamp-3">{character.description}</p>
+              </div>
+              <SettingsPanel settings={settings} updateSettings={(s) => setSettings(prev => ({ ...prev, ...s }))} />
+              <div className="bg-indigo-900 text-white p-4 rounded-2xl shadow-lg">
+                <h4 className="font-bold mb-2">Current Stats</h4>
+                <div className="text-sm opacity-80">
+                  <div className="flex justify-between mb-1">
+                    <span>Accuracy</span>
+                    <span>{readingHistory.length > 0 ? readingHistory[readingHistory.length - 1].stats.accuracy : 0}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Words Read</span>
+                    <span>{readingHistory.reduce((a,b) => a + b.wordCount, 0)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Reading Area - Locked height, internal scroll */}
+            <div className="lg:col-span-9 h-full flex flex-col min-h-0">
+              {isLoading ? (
+                <div className="flex-grow flex flex-col items-center justify-center bg-white/50 rounded-2xl p-8">
+                   <div className="w-full max-w-md text-center space-y-6">
+                      {/* Scene Preview */}
+                      <div className="w-64 h-64 mx-auto rounded-2xl overflow-hidden shadow-xl bg-gray-200 border-4 border-white relative">
+                          {loadingSceneUrl ? (
+                              <img src={loadingSceneUrl} className="w-full h-full object-cover animate-in fade-in duration-500" alt="Scene preview" />
+                          ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                  <Loader2 className="w-12 h-12 text-gray-400 animate-spin" />
+                              </div>
+                          )}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent flex items-end justify-center p-4">
+                              <span className="text-white font-medium text-sm">Visualizing Chapter {storyHistory.length + 1}...</span>
+                          </div>
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div>
+                        <div className="flex justify-between text-sm font-bold text-indigo-800 mb-2">
+                            <span>Writing Story...</span>
+                            <span>{generatedWordCount} / 1000 words</span>
+                        </div>
+                        <div className="w-full h-3 bg-indigo-100 rounded-full overflow-hidden">
+                            <div 
+                                className="h-full bg-indigo-600 transition-all duration-300 ease-out"
+                                style={{ width: `${Math.min(100, Math.floor((generatedWordCount / 1000) * 100))}%` }}
+                            />
+                        </div>
+                      </div>
+                   </div>
+                </div>
+              ) : storyHistory[currentChapterIndex] ? (
+                <FocusReader 
+                  chapter={storyHistory[currentChapterIndex]}
+                  settings={settings}
+                  onFinishChapter={handleFinishChapter}
+                  onMakeChoice={handleMakeChoice}
+                />
+              ) : (
+                <div className="p-8 text-center text-red-500 bg-white rounded-xl shadow">
+                    Something went wrong loading the chapter. Please restart the adventure.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {view === 'parents' && (
+          <ParentDashboard history={readingHistory} />
+        )}
+      </main>
+    </div>
+  );
+}
