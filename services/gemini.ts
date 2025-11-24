@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { ReadingStats, StoryChapter } from "../types";
+import { ReadingStats, StoryChapter, StoryConfig } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -25,13 +25,19 @@ const cleanAndParseJSON = (text: string): any => {
 };
 
 // --- Image Generation ---
-export const generateCharacterImage = async (description: string): Promise<string> => {
+export const generateCharacterImage = async (description: string, age: number): Promise<string> => {
   try {
+    const stylePrompt = age < 7 
+      ? "cute, simple, soft colors, nursery rhyme style" 
+      : age < 10 
+        ? "colorful, cartoon style, vibrant" 
+        : "detailed, comic book or fantasy art style";
+
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [
-          { text: `Create a colorful, friendly, children's book style illustration of a character matching this description: ${description}. The character should be on a plain or simple background. Ensure high quality and cute style.` }
+          { text: `Create a character illustration matching this description: ${description}. Style: ${stylePrompt}. The character should be on a plain or simple background. Ensure high quality.` }
         ]
       },
     });
@@ -113,7 +119,7 @@ export const generateImageTweaks = async (description: string): Promise<string[]
   }
 };
 
-export const generateSceneImage = async (previousChapterContent: string): Promise<string> => {
+export const generateSceneImage = async (previousChapterContent: string, characterDescription: string): Promise<string> => {
     try {
         // Step 1: Summarize context into a visual scene description
         const summaryResponse = await ai.models.generateContent({
@@ -127,7 +133,7 @@ export const generateSceneImage = async (previousChapterContent: string): Promis
             model: 'gemini-2.5-flash-image',
             contents: {
                 parts: [
-                    { text: `Create a colorful children's book illustration for this scene: ${sceneDescription}. Keep the style consistent, friendly and vibrant.` }
+                    { text: `Create a colorful children's book illustration for this scene: ${sceneDescription}. \n\nIMPORTANT - Include the main character in the scene based on this description: ${characterDescription}. \n\nKeep the style consistent, friendly and vibrant.` }
                 ]
             },
         });
@@ -147,13 +153,23 @@ export const generateSceneImage = async (previousChapterContent: string): Promis
 }
 
 // --- Story Generation ---
-export const generateStoryStart = async (charName: string, charDesc: string, onProgress?: (count: number) => void): Promise<StoryChapter> => {
+export const generateStoryStart = async (
+    charName: string, 
+    charDesc: string, 
+    config: StoryConfig, 
+    onProgress?: (count: number) => void
+): Promise<StoryChapter> => {
   // Using Gemini 3 Pro for higher quality creative writing
   const prompt = `Write the first chapter of a children's adventure story about a hero named ${charName} who is ${charDesc}. 
   
+  CONFIGURATION:
+  - Target Audience Age: ${config.readingAge} years old.
+  - Vocabulary Difficulty: ${config.readingAge < 7 ? "Very Simple (Dolch sight words, short sentences)" : config.readingAge < 10 ? "Simple (Common words, moderate sentences)" : "Moderate (Some challenging words allowed)"}.
+  - Chapter Length: Approximately ${config.targetWordCount} words.
+  - Total Book Length: ${config.totalChapters} chapters.
+  
   REQUIREMENTS:
-  - Length: Approximately 500-1000 words.
-  - Tone: Engaging, fun, and suitable for a 10-year-old (Lexile 600L-800L).
+  - Tone: Engaging, fun, and age-appropriate.
   - Structure: Use proper paragraphs, dialogue, and correct punctuation.
   - Ending: End the chapter with a clear cliffhanger or decision point.
   - Choices: Provide 3 distinct short options for what happens next.
@@ -171,8 +187,6 @@ export const generateStoryStart = async (charName: string, charDesc: string, onP
     config: {
       maxOutputTokens: 8192,
       responseMimeType: "application/json",
-      // We rely on the prompt for structure, avoiding strict schema here to prevent token limit truncation issues with large text fields in strict mode, 
-      // but we will parse carefully.
     }
   });
 
@@ -183,7 +197,6 @@ export const generateStoryStart = async (charName: string, charDesc: string, onP
     if (chunkText) {
         fullText += chunkText;
         if (onProgress) {
-            // Rough word count estimation
             onProgress(fullText.split(/\s+/).length);
         }
     }
@@ -198,24 +211,51 @@ export const generateStoryStart = async (charName: string, charDesc: string, onP
   };
 };
 
-export const generateNextChapter = async (previousContext: string, choice: string, onProgress?: (count: number) => void): Promise<StoryChapter> => {
+export const generateNextChapter = async (
+    previousContext: string, 
+    choice: string, 
+    config: StoryConfig,
+    currentChapterIndex: number, // 0-based index of the chapter we are ABOUT to generate
+    onProgress?: (count: number) => void
+): Promise<StoryChapter> => {
+  
+  const isPenultimate = currentChapterIndex === config.totalChapters - 2; // e.g., if total 5, index 3 is penultimate (Chapter 4)
+  const isFinal = currentChapterIndex === config.totalChapters - 1; // e.g., if total 5, index 4 is final (Chapter 5)
+
+  let narrativeInstruction = "";
+  if (isPenultimate) {
+      narrativeInstruction = "IMPORTANT: This is the PENULTIMATE chapter. Build up to a major event or climax! Do not resolve the story yet, but set the stage for the big finale.";
+  } else if (isFinal) {
+      narrativeInstruction = "IMPORTANT: This is the FINAL chapter. Explain the outcome of the adventure and what happened after the event. Provide a satisfying conclusion.";
+  } else {
+      narrativeInstruction = "Continue the adventure. Build character development and introduce new challenges.";
+  }
+
   const prompt = `Continue the story based on the previous context. The user chose: "${choice}".
   
+  CONFIGURATION:
+  - Target Audience Age: ${config.readingAge} years old.
+  - Vocabulary: ${config.readingAge < 7 ? "Very Simple" : "Age Appropriate"}.
+  - Target Length: ${config.targetWordCount} words.
+  - Current Chapter: ${currentChapterIndex + 1} of ${config.totalChapters}.
+  
+  NARRATIVE GOAL: ${narrativeInstruction}
+  
   REQUIREMENTS:
-  - Length: Approximately 500-1000 words.
-  - Tone: Engaging, fun, and suitable for a 10-year-old.
+  - Length: Approximately ${config.targetWordCount} words.
+  - Tone: Engaging, fun, and suitable for the age group.
   - Structure: Use proper paragraphs, dialogue, and correct punctuation.
   - Consistency: Maintain the plot and character personality.
-  - Ending: End with 3 new distinct options.
+  ${isFinal ? '- Ending: This is the end. Do NOT provide choices.' : '- Ending: End with 3 new distinct options.'}
   
   Output JSON format:
   {
     "title": "Chapter Title",
     "content": "Full story text here...",
-    "choices": ["Option 1", "Option 2", "Option 3"]
+    "choices": ${isFinal ? "[]" : `["Option 1", "Option 2", "Option 3"]`}
   }`;
 
-  // Limit context to prevent token overflow, keeping last ~15000 chars roughly
+  // Limit context
   const trimmedContext = previousContext.length > 20000 ? "..." + previousContext.slice(-20000) : previousContext;
 
   const responseStream = await ai.models.generateContentStream({
@@ -245,9 +285,9 @@ export const generateNextChapter = async (previousContext: string, choice: strin
   const data = cleanAndParseJSON(fullText);
 
   return {
-    title: data.title || "Next Chapter",
+    title: data.title || (isFinal ? "The End" : "Next Chapter"),
     content: data.content || "The story continues...",
-    choices: Array.isArray(data.choices) && data.choices.length > 0 ? data.choices : ["Continue"]
+    choices: isFinal ? [] : (Array.isArray(data.choices) && data.choices.length > 0 ? data.choices : ["Continue"])
   };
 };
 

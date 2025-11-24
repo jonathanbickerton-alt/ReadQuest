@@ -10,20 +10,21 @@ export interface StoryChapter {
   choices?: string[];
 }
 
-export interface ReadingSession {
-  id: string;
-  date: string;
-  chapterTitle: string;
-  wordCount: number;
-  durationSeconds: number;
-  stats: ReadingStats;
-}
-
 export interface ReadingStats {
   accuracy: number; // 0-100
   speed: number; // WPM
   pronunciation: number; // 0-100 score
   missedWords: string[];
+}
+
+export interface ReadingSession {
+  id: string;
+  date: string;
+  bookTitle?: string; // New field for grouping
+  chapterTitle: string;
+  wordCount: number;
+  durationSeconds: number;
+  stats: ReadingStats;
 }
 
 export interface AppSettings {
@@ -32,10 +33,20 @@ export interface AppSettings {
   fontSize: 'normal' | 'large' | 'xl';
 }
 
+export interface StoryConfig {
+  readingAge: number;
+  targetWordCount: number;
+  totalChapters: number;
+}
+
 export interface GameState {
+  id: string; 
+  lastSaved: string; 
+  title?: string; // Story title
   character: Character;
+  storyConfig: StoryConfig; // New field for story settings
   storyHistory: StoryChapter[];
   currentChapterIndex: number;
   readingHistory: ReadingSession[];
-  generatedWordCount: number; // To preserve progress state if saved mid-generation (though usually we save after)
+  generatedWordCount: number;
 }

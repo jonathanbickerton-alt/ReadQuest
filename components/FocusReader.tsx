@@ -180,7 +180,7 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
                 return (
                     <span 
                         key={idx} 
-                        ref={el => sentenceRefs.current[idx] = el}
+                        ref={(el) => { sentenceRefs.current[idx] = el; }}
                         onClick={() => setCurrentSentenceIndex(idx)}
                         className={`
                             block mb-6 rounded-xl px-4 py-3 transition-all duration-500 ease-in-out cursor-pointer border border-transparent leading-relaxed

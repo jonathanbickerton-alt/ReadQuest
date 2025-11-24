@@ -1,26 +1,56 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { ReadingSession } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
-import { Activity, BookOpen, Clock, AlertCircle, TrendingUp, CheckCircle, Info } from 'lucide-react';
+import { Activity, BookOpen, Clock, AlertCircle, CheckCircle, Info, ChevronDown } from 'lucide-react';
 
 interface Props {
   history: ReadingSession[];
 }
 
 const ParentDashboard: React.FC<Props> = ({ history }) => {
-  // Prep data for charts
-  const accuracyData = history.map(s => ({ date: new Date(s.date).toLocaleDateString(), accuracy: s.stats.accuracy }));
-  const speedData = history.map(s => ({ date: new Date(s.date).toLocaleDateString(), speed: s.stats.speed }));
+  const [selectedBook, setSelectedBook] = useState<string>('All Books');
 
-  const totalWords = history.reduce((acc, curr) => acc + curr.wordCount, 0);
-  const totalSessions = history.length;
-  const avgAccuracy = totalSessions > 0 ? (history.reduce((acc, curr) => acc + curr.stats.accuracy, 0) / totalSessions).toFixed(1) : 0;
+  // Get unique book titles
+  const bookTitles = useMemo(() => {
+    const titles = new Set(history.map(s => s.bookTitle || "Unknown Book"));
+    return ['All Books', ...Array.from(titles)];
+  }, [history]);
+
+  // Filter history based on selection
+  const filteredHistory = useMemo(() => {
+    if (selectedBook === 'All Books') return history;
+    return history.filter(s => (s.bookTitle || "Unknown Book") === selectedBook);
+  }, [history, selectedBook]);
+
+  // Prep data for charts
+  const accuracyData = filteredHistory.map(s => ({ date: new Date(s.date).toLocaleDateString(), accuracy: s.stats.accuracy }));
+  const speedData = filteredHistory.map(s => ({ date: new Date(s.date).toLocaleDateString(), speed: s.stats.speed }));
+
+  const totalWords = filteredHistory.reduce((acc, curr) => acc + curr.wordCount, 0);
+  const totalSessions = filteredHistory.length;
+  const avgAccuracy = totalSessions > 0 ? (filteredHistory.reduce((acc, curr) => acc + curr.stats.accuracy, 0) / totalSessions).toFixed(1) : 0;
 
   return (
     <div className="max-w-6xl mx-auto p-6">
-      <h2 className="text-3xl font-bold text-indigo-900 mb-6 flex items-center gap-3">
-        <Activity className="w-8 h-8" /> Parent Dashboard
-      </h2>
+      <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
+        <h2 className="text-3xl font-bold text-indigo-900 flex items-center gap-3">
+            <Activity className="w-8 h-8" /> Parent Dashboard
+        </h2>
+        
+        {/* Book Selector */}
+        <div className="relative min-w-[200px]">
+            <select 
+                value={selectedBook}
+                onChange={(e) => setSelectedBook(e.target.value)}
+                className="w-full appearance-none bg-white border-2 border-indigo-100 hover:border-indigo-300 px-4 py-2 pr-8 rounded-xl font-medium text-gray-700 focus:outline-none focus:border-indigo-500 cursor-pointer shadow-sm transition-all"
+            >
+                {bookTitles.map(title => (
+                    <option key={title} value={title}>{title}</option>
+                ))}
+            </select>
+            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none"/>
+        </div>
+      </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
@@ -39,8 +69,8 @@ const ParentDashboard: React.FC<Props> = ({ history }) => {
         <div className="bg-white p-6 rounded-xl shadow border-l-4 border-orange-500">
           <div className="flex items-center gap-2 text-gray-500 mb-1"><AlertCircle className="w-4 h-4"/> Recent Misses</div>
           <div className="text-sm text-gray-600 line-clamp-2">
-            {history.length > 0 && history[history.length - 1].stats.missedWords.length > 0 
-                ? history[history.length - 1].stats.missedWords.slice(0, 3).join(", ") + (history[history.length - 1].stats.missedWords.length > 3 ? "..." : "")
+            {filteredHistory.length > 0 && filteredHistory[filteredHistory.length - 1].stats.missedWords.length > 0 
+                ? filteredHistory[filteredHistory.length - 1].stats.missedWords.slice(0, 3).join(", ") + (filteredHistory[filteredHistory.length - 1].stats.missedWords.length > 3 ? "..." : "")
                 : "None"}
           </div>
         </div>
@@ -88,19 +118,21 @@ const ParentDashboard: React.FC<Props> = ({ history }) => {
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="py-3 px-4 font-semibold text-gray-600 w-32 rounded-tl-lg">Date</th>
+                <th className="py-3 px-4 font-semibold text-gray-600 w-48">Book</th>
                 <th className="py-3 px-4 font-semibold text-gray-600 w-48">Chapter</th>
                 <th className="py-3 px-4 font-semibold text-gray-600">Performance & Feedback</th>
                 <th className="py-3 px-4 font-semibold text-gray-600 w-24 rounded-tr-lg">Speed</th>
               </tr>
             </thead>
             <tbody>
-              {history.slice().reverse().map((session) => (
+              {filteredHistory.slice().reverse().map((session) => (
                 <tr key={session.id} className="border-b border-gray-100 hover:bg-gray-50 align-top transition-colors">
                   <td className="py-4 px-4 whitespace-nowrap text-sm text-gray-600">
                     <div className="font-medium">{new Date(session.date).toLocaleDateString()}</div>
                     <div className="text-xs text-gray-400">{new Date(session.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
                     <div className="mt-1 text-xs text-gray-500 font-mono">{Math.round(session.durationSeconds / 60)}m {Math.floor(session.durationSeconds % 60)}s</div>
                   </td>
+                  <td className="py-4 px-4 font-medium text-gray-700 text-sm">{session.bookTitle || 'Unknown'}</td>
                   <td className="py-4 px-4 font-medium text-indigo-900">{session.chapterTitle}</td>
                   
                   {/* Scores & Feedback Combined Column */}
@@ -150,11 +182,11 @@ const ParentDashboard: React.FC<Props> = ({ history }) => {
                   </td>
                 </tr>
               ))}
-              {history.length === 0 && (
+              {filteredHistory.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="py-12 text-center text-gray-500 bg-gray-50 rounded-b-lg">
+                  <td colSpan={5} className="py-12 text-center text-gray-500 bg-gray-50 rounded-b-lg">
                     <BookOpen className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                    <p>No reading sessions yet. Start a story to see detailed feedback here.</p>
+                    <p>No reading sessions found for this selection.</p>
                   </td>
                 </tr>
               )}
