@@ -1,8 +1,7 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { AppSettings, StoryChapter } from '../types';
 import { LiveClient } from '../services/liveClient';
-import { Mic, MicOff, ChevronDown, ChevronUp, ChevronRight, PlayCircle, ChevronLeft } from 'lucide-react';
+import { Mic, MicOff, ChevronDown, ChevronUp, ChevronRight, PlayCircle, ChevronLeft, Maximize2 } from 'lucide-react';
 
 interface Props {
   chapter: StoryChapter;
@@ -12,9 +11,10 @@ interface Props {
   isLatestChapter?: boolean;
   onPrevChapter?: () => void;
   onNextChapter?: () => void;
+  onExpandImage?: (url: string) => void;
 }
 
-const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMakeChoice, isLatestChapter = true, onPrevChapter, onNextChapter }) => {
+const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMakeChoice, isLatestChapter = true, onPrevChapter, onNextChapter, onExpandImage }) => {
   const [isLive, setIsLive] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
@@ -149,7 +149,7 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
                     onClick={onNextChapter}
                     className="flex items-center gap-1 px-4 py-2 rounded-full bg-indigo-50 text-indigo-700 font-bold hover:bg-indigo-100 transition-colors"
                 >
-                    Next Chapter <ChevronRight size={20} />
+                    Next <ChevronRight size={20} />
                 </button>
             ) : (
                 <button
@@ -192,18 +192,26 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
         {/* Text Content */}
         <div 
             ref={contentRef}
-            className="absolute inset-0 overflow-y-auto scroll-smooth no-scrollbar"
+            className="absolute inset-0 overflow-y-auto scroll-smooth no-scrollbar bg-texture"
             style={containerStyle}
         >
           {/* Chapter Image Banner */}
           {chapter.imageUrl && (
-              <div className="w-full h-48 md:h-64 relative mb-6">
+              <div 
+                  className="w-full h-48 md:h-64 relative mb-6 group cursor-zoom-in"
+                  onClick={() => onExpandImage && chapter.imageUrl && onExpandImage(chapter.imageUrl)}
+              >
                   <img 
                     src={chapter.imageUrl} 
                     alt="Scene" 
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+                  
+                  {/* Hover Overlay */}
+                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center pointer-events-none">
+                        <Maximize2 className="text-white opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all w-12 h-12 drop-shadow-md" />
+                    </div>
               </div>
           )}
 
@@ -258,10 +266,30 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
         </div>
       )}
       
-      {/* Visual Indicator for history mode */}
+      {/* History Mode Navigation */}
       {!isLatestChapter && (
-          <div className="flex-none bg-indigo-50 border-t border-indigo-100 p-3 z-50 text-center text-sm text-indigo-600 font-medium">
-              Viewing past chapter. Navigate forward to continue the story.
+          <div className="flex-none bg-indigo-50 border-t border-indigo-100 p-4 z-50 flex justify-between items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+              {onPrevChapter ? (
+                  <button 
+                      onClick={onPrevChapter}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-indigo-700 font-medium hover:bg-indigo-100 transition-colors"
+                  >
+                      <ChevronLeft size={20} /> Previous
+                  </button>
+              ) : <div className="w-24"></div>}
+              
+              <div className="text-sm font-bold text-indigo-400 uppercase tracking-wider bg-indigo-100/50 px-3 py-1 rounded-full">
+                  Viewing Past Chapter
+              </div>
+
+              {onNextChapter ? (
+                  <button 
+                      onClick={onNextChapter}
+                      className="flex items-center gap-2 px-6 py-2 rounded-full bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition-colors shadow-sm"
+                  >
+                      Next <ChevronRight size={20} />
+                  </button>
+              ) : <div className="w-24"></div>}
           </div>
       )}
     </div>

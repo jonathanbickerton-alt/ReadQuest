@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AppSettings, Character, ReadingSession, StoryChapter, GameState, StoryConfig } from './types';
 import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateSceneImage, getPlaceholderImage } from './services/gemini';
+import { saveGameToDB, getSavedGamesFromDB, deleteSaveFromDB } from './services/db';
 import FocusReader from './components/FocusReader';
 import ParentDashboard from './components/ParentDashboard';
 import SettingsPanel from './components/SettingsPanel';
@@ -67,39 +67,69 @@ export default function App() {
 
   // --- Effects ---
   useEffect(() => {
-    try {
-        // Migration Logic: Check for old single save format and move to array
-        const oldSave = localStorage.getItem('readquest_save');
-        let currentSaves: GameState[] = [];
-        const savesRaw = localStorage.getItem('readquest_saves');
-        
-        if (savesRaw) {
-            currentSaves = JSON.parse(savesRaw);
-        }
+    const initStorage = async () => {
+        try {
+            // 1. Load existing saves from IndexedDB
+            let dbSaves = await getSavedGamesFromDB();
+            
+            // 2. Migration: Check for localStorage saves (quota issue fix)
+            const localSavesRaw = localStorage.getItem('readquest_saves');
+            const oldSingleSave = localStorage.getItem('readquest_save');
+            
+            let migratedCount = 0;
 
-        if (oldSave) {
-            try {
-                const parsedOld = JSON.parse(oldSave);
-                // Assign a new ID if it doesn't exist
-                const migratedSave: GameState = {
-                    ...parsedOld,
-                    id: parsedOld.id || Date.now().toString(),
-                    lastSaved: parsedOld.lastSaved || new Date().toISOString(),
-                    // Default config for old saves
-                    storyConfig: parsedOld.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10, visualStyle: VISUAL_STYLES[0].value }
-                };
-                currentSaves.push(migratedSave);
-                localStorage.setItem('readquest_saves', JSON.stringify(currentSaves));
-                localStorage.removeItem('readquest_save'); // Clear old format
-            } catch (e) {
-                console.error("Migration failed", e);
+            if (localSavesRaw) {
+                try {
+                    const localSaves = JSON.parse(localSavesRaw);
+                    for (const s of localSaves) {
+                         // Only save if not already in DB
+                         if (!dbSaves.some(dbS => dbS.id === s.id)) {
+                             await saveGameToDB(s);
+                             migratedCount++;
+                         }
+                    }
+                    localStorage.removeItem('readquest_saves'); 
+                } catch (e) {
+                    console.error("Migration from localSaves failed", e);
+                }
             }
+
+            if (oldSingleSave) {
+                 try {
+                     const single = JSON.parse(oldSingleSave);
+                     const id = single.id || Date.now().toString();
+                     if (!dbSaves.some(dbS => dbS.id === id)) {
+                         const migrated = {
+                             ...single,
+                             id: id,
+                             lastSaved: single.lastSaved || new Date().toISOString(),
+                             storyConfig: single.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10, visualStyle: VISUAL_STYLES[0].value }
+                         };
+                         await saveGameToDB(migrated);
+                         migratedCount++;
+                     }
+                     localStorage.removeItem('readquest_save');
+                 } catch (e) {
+                     console.error("Migration from single save failed", e);
+                 }
+            }
+
+            if (migratedCount > 0) {
+                // Refresh if we added anything
+                dbSaves = await getSavedGamesFromDB();
+            }
+
+            // Sort by date new to old
+            dbSaves.sort((a, b) => new Date(b.lastSaved).getTime() - new Date(a.lastSaved).getTime());
+            setSavedGames(dbSaves);
+
+        } catch (e) {
+            console.error("Storage initialization failed", e);
+            setErrorMessage("Could not initialize game database.");
         }
-        
-        setSavedGames(currentSaves);
-    } catch (e) {
-        console.warn("Local storage access denied or full", e);
-    }
+    };
+
+    initStorage();
   }, []);
 
   // Update config defaults when age changes
@@ -157,7 +187,7 @@ export default function App() {
 
   // --- Handlers ---
 
-  const handleSaveGame = () => {
+  const handleSaveGame = async () => {
     if (!character || storyHistory.length === 0) return;
     
     // Use existing ID or create new one
@@ -177,22 +207,24 @@ export default function App() {
     };
 
     try {
-        // Update list of saves
-        const newSaves = savedGames.filter(g => g.id !== saveId);
-        newSaves.push(gameState);
-        
-        // Sort by date new to old
-        newSaves.sort((a, b) => new Date(b.lastSaved).getTime() - new Date(a.lastSaved).getTime());
+        // Save to IndexedDB (Async)
+        await saveGameToDB(gameState);
 
-        localStorage.setItem('readquest_saves', JSON.stringify(newSaves));
-        setSavedGames(newSaves);
+        // Update local state to reflect change immediately
+        setSavedGames(prev => {
+            const others = prev.filter(g => g.id !== saveId);
+            const updatedList = [gameState, ...others];
+            updatedList.sort((a, b) => new Date(b.lastSaved).getTime() - new Date(a.lastSaved).getTime());
+            return updatedList;
+        });
+
         setCurrentGameId(saveId);
         
         setShowSaveConfirm(true);
         setTimeout(() => setShowSaveConfirm(false), 2000);
     } catch (e) {
         console.error("Save failed", e);
-        setErrorMessage("Could not save game. Browser storage might be full (Images take up space!). Try deleting old saves.");
+        setErrorMessage("Could not save game. Your device storage might be full.");
     }
   };
 
@@ -219,12 +251,17 @@ export default function App() {
     setDeleteConfirmId(id);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (!deleteConfirmId) return;
-    const newSaves = savedGames.filter(g => g.id !== deleteConfirmId);
-    localStorage.setItem('readquest_saves', JSON.stringify(newSaves));
-    setSavedGames(newSaves);
-    setDeleteConfirmId(null);
+    
+    try {
+        await deleteSaveFromDB(deleteConfirmId);
+        setSavedGames(prev => prev.filter(g => g.id !== deleteConfirmId));
+    } catch(e) {
+        console.error("Delete failed", e);
+    } finally {
+        setDeleteConfirmId(null);
+    }
   };
 
   const handleStartCreation = async () => {
@@ -344,7 +381,53 @@ export default function App() {
       };
       
       setReadingHistory(prev => [...prev, newSession]);
-      handleSaveGame(); // Auto-save after chapter completion
+      // We must save after state updates. 
+      // NOTE: React state updates are batched/async. 
+      // For simplicity/robustness here, we'll manually merge the new session into the save call.
+      // But handleSaveGame uses the state 'readingHistory'. 
+      // To be safe, we will call save in a useEffect or assume the user clicks save, 
+      // OR we can pass the new history directly.
+      // Let's rely on the user clicking save OR we can trigger it. 
+      // Better approach: Update the state, then in a useEffect for readingHistory, trigger save?
+      // No, that causes too many saves.
+      // Let's modify handleSaveGame to be callable with overrides, OR just accept that for this auto-save
+      // we might miss the very last split second update if not careful.
+      // Actually, let's just wait a tick or use the updated value directly.
+      
+      // Better: Construct the new full history and pass it to a helper that saves.
+      // But handleSaveGame pulls from state.
+      // Let's update state, then call save. 
+      // Given the complexity of React batching, we will do a manual save logic here for the auto-save.
+      
+      const updatedHistory = [...readingHistory, newSession];
+      
+      // Trigger save with the updated data
+      // We can't easily call handleSaveGame because it reads stale state closure.
+      // We will duplicate the save logic slightly for this auto-event or use a ref.
+      // Refactoring handleSaveGame to accept args is best.
+      
+      // Let's do this:
+      const saveId = currentGameId || Date.now().toString();
+      const timestamp = new Date().toISOString();
+      const gameState: GameState = {
+        id: saveId,
+        lastSaved: timestamp,
+        title: character?.name + "'s Adventure",
+        character: character!,
+        storyConfig,
+        storyHistory,
+        currentChapterIndex,
+        readingHistory: updatedHistory,
+        generatedWordCount
+      };
+      
+      await saveGameToDB(gameState);
+      // Update local saves list too
+      setSavedGames(prev => {
+          const others = prev.filter(g => g.id !== saveId);
+          return [gameState, ...others].sort((a, b) => new Date(b.lastSaved).getTime() - new Date(a.lastSaved).getTime());
+      });
+      
     } catch (e) {
       console.error("Scoring failed", e);
     } finally {
@@ -386,9 +469,30 @@ export default function App() {
             console.warn("Scene Image attachment failed", e);
         }
 
-        setStoryHistory(prev => [...prev, nextChapter]);
-        setCurrentChapterIndex(prev => prev + 1);
-        handleSaveGame(); // Auto-save on new chapter
+        const newHistory = [...storyHistory, nextChapter];
+        setStoryHistory(newHistory);
+        const newIndex = currentChapterIndex + 1;
+        setCurrentChapterIndex(newIndex);
+        
+        // Auto-save with new chapter
+        const saveId = currentGameId || Date.now().toString();
+        const gameState: GameState = {
+            id: saveId,
+            lastSaved: new Date().toISOString(),
+            title: character?.name + "'s Adventure",
+            character: character!,
+            storyConfig,
+            storyHistory: newHistory,
+            currentChapterIndex: newIndex,
+            readingHistory,
+            generatedWordCount: 0 // reset
+        };
+        await saveGameToDB(gameState);
+        setSavedGames(prev => {
+             const others = prev.filter(g => g.id !== saveId);
+             return [gameState, ...others].sort((a, b) => new Date(b.lastSaved).getTime() - new Date(a.lastSaved).getTime());
+        });
+
     } catch (e) {
         console.error("Next chapter failed", e);
         setErrorMessage("Could not load the next chapter.");
@@ -838,7 +942,7 @@ export default function App() {
 
   return (
     // Fixed inset-0 ensures we take exactly the viewport size, preventing body scrollbar
-    <div className={`fixed inset-0 flex flex-col transition-colors duration-500 ${settings.colorTheme === 'default' ? 'bg-gray-50' : settings.colorTheme === 'yellow' ? 'bg-[#fdf6e3]' : settings.colorTheme === 'blue' ? 'bg-[#e0f7fa]' : 'bg-[#fce4ec]'}`}>
+    <div className={`fixed inset-0 flex flex-col transition-colors duration-500 bg-texture ${settings.colorTheme === 'default' ? 'bg-gray-50' : settings.colorTheme === 'yellow' ? 'bg-[#fdf6e3]' : settings.colorTheme === 'blue' ? 'bg-[#e0f7fa]' : 'bg-[#fce4ec]'}`}>
       
       {/* Navigation - Fixed height */}
       <nav className="flex-none h-16 bg-white/80 backdrop-blur-md border-b border-gray-200 z-50">
@@ -909,7 +1013,8 @@ export default function App() {
                         src={displaySrc || character.imageUrl} 
                         alt={character.name} 
                         className="w-full h-full rounded-full object-cover border-4 border-indigo-100 shadow-sm"
-                        onError={(e) => e.currentTarget.src = getPlaceholderImage(character.name)}
+                        onLoad={handleImageLoad}
+                        onError={handleImageError}
                     />
                     <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
                          <Maximize2 className="text-white opacity-0 group-hover:opacity-100 w-8 h-8 drop-shadow-md" />
@@ -921,16 +1026,46 @@ export default function App() {
               <SettingsPanel settings={settings} updateSettings={(s) => setSettings(prev => ({ ...prev, ...s }))} />
               
               <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
-                  <h4 className="font-bold text-indigo-900 mb-2 text-sm flex items-center gap-2"><Ruler className="w-3 h-3"/> Progress</h4>
-                  <div className="flex justify-between text-xs text-gray-600 mb-1">
-                      <span>Chapter</span>
-                      <span>{currentChapterIndex + 1} / {storyConfig.totalChapters}</span>
+                  <div className="mb-4">
+                    <h4 className="font-bold text-indigo-900 mb-2 text-sm flex items-center gap-2"><Ruler className="w-3 h-3"/> Progress</h4>
+                    <div className="flex justify-between text-xs text-gray-600 mb-1">
+                        <span>Chapter</span>
+                        <span>{currentChapterIndex + 1} / {storyConfig.totalChapters}</span>
+                    </div>
+                    <div className="w-full bg-white rounded-full h-2">
+                        <div 
+                            className="bg-indigo-500 h-2 rounded-full transition-all duration-500" 
+                            style={{width: `${Math.min(100, ((currentChapterIndex + 1) / storyConfig.totalChapters) * 100)}%`}}
+                        />
+                    </div>
                   </div>
-                  <div className="w-full bg-white rounded-full h-2">
-                    <div 
-                        className="bg-indigo-500 h-2 rounded-full transition-all duration-500" 
-                        style={{width: `${Math.min(100, ((currentChapterIndex + 1) / storyConfig.totalChapters) * 100)}%`}}
-                    />
+
+                  {/* Chapter History List */}
+                  <div className="border-t border-indigo-200 pt-3">
+                    <h5 className="font-bold text-indigo-800 text-xs mb-2 flex items-center gap-2">
+                        <Layers className="w-3 h-3"/> Adventure Log
+                    </h5>
+                    <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                        {storyHistory.map((chapter, idx) => (
+                            <button
+                                key={idx}
+                                onClick={() => setCurrentChapterIndex(idx)}
+                                className={`w-full text-left text-xs py-2 px-3 rounded-lg transition-all flex items-center gap-2 ${
+                                    idx === currentChapterIndex 
+                                    ? 'bg-white shadow-sm text-indigo-700 font-bold border border-indigo-100' 
+                                    : 'text-gray-600 hover:bg-indigo-100/50 hover:text-indigo-600'
+                                }`}
+                            >
+                                <span className={`flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-[10px] ${
+                                    idx === currentChapterIndex ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-500'
+                                }`}>
+                                    {idx + 1}
+                                </span>
+                                <span className="truncate">{chapter.title}</span>
+                                {idx === currentChapterIndex && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-green-500"></div>}
+                            </button>
+                        ))}
+                    </div>
                   </div>
               </div>
 
@@ -997,6 +1132,7 @@ export default function App() {
                   isLatestChapter={currentChapterIndex === storyHistory.length - 1}
                   onPrevChapter={currentChapterIndex > 0 ? handlePrevChapter : undefined}
                   onNextChapter={currentChapterIndex < storyHistory.length - 1 ? handleNextChapter : undefined}
+                  onExpandImage={setExpandedImage}
                 />
               ) : (
                 <div className="p-8 text-center text-red-500 bg-white rounded-xl shadow">
