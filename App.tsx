@@ -244,11 +244,13 @@ export default function App() {
         storyConfig.visualStyle
       );
 
-      setCharacter({
+      const newCharacter = {
         name: charNameInput,
         description: charDescInput,
         imageUrl: imgUrl
-      });
+      };
+
+      setCharacter(newCharacter);
       
       // Move to Review View
       setView('character-review');
@@ -261,7 +263,18 @@ export default function App() {
       generateStoryStart(charNameInput, charDescInput, storyConfig, (count) => {
         setGeneratedWordCount(count);
       })
-        .then(chapter => {
+        .then(async chapter => {
+          // GENERATE SCENE IMAGE FOR CHAPTER 1
+          try {
+              const ch1Image = await generateSceneImage(
+                  chapter.content, 
+                  newCharacter.description, 
+                  storyConfig.visualStyle
+              );
+              chapter.imageUrl = ch1Image;
+          } catch(e) {
+              console.warn("Ch1 Image gen failed", e);
+          }
           setPendingChapter(chapter);
         })
         .catch(e => {
@@ -348,12 +361,14 @@ export default function App() {
 
     try {
         // Start generating the scene summary image immediately (visual context)
-        // Passed character description AND style to ensure visual consistency
-        generateSceneImage(
+        const imagePromise = generateSceneImage(
             previousContext, 
             character?.description || "", 
             storyConfig.visualStyle
-        ).then(url => setLoadingSceneUrl(url));
+        );
+        
+        // Wire up preview for UI
+        imagePromise.then(url => setLoadingSceneUrl(url));
 
         // Start writing the next chapter stream
         const nextChapter = await generateNextChapter(
@@ -364,6 +379,13 @@ export default function App() {
             (count) => setGeneratedWordCount(count)
         );
 
+        // Attach the generated image to the new chapter
+        try {
+            nextChapter.imageUrl = await imagePromise;
+        } catch (e) {
+            console.warn("Scene Image attachment failed", e);
+        }
+
         setStoryHistory(prev => [...prev, nextChapter]);
         setCurrentChapterIndex(prev => prev + 1);
         handleSaveGame(); // Auto-save on new chapter
@@ -372,6 +394,18 @@ export default function App() {
         setErrorMessage("Could not load the next chapter.");
     } finally {
         setIsLoading(false);
+    }
+  };
+
+  const handlePrevChapter = () => {
+    if (currentChapterIndex > 0) {
+        setCurrentChapterIndex(prev => prev - 1);
+    }
+  };
+
+  const handleNextChapter = () => {
+    if (currentChapterIndex < storyHistory.length - 1) {
+        setCurrentChapterIndex(prev => prev + 1);
     }
   };
 
@@ -960,6 +994,9 @@ export default function App() {
                   settings={settings}
                   onFinishChapter={handleFinishChapter}
                   onMakeChoice={handleMakeChoice}
+                  isLatestChapter={currentChapterIndex === storyHistory.length - 1}
+                  onPrevChapter={currentChapterIndex > 0 ? handlePrevChapter : undefined}
+                  onNextChapter={currentChapterIndex < storyHistory.length - 1 ? handleNextChapter : undefined}
                 />
               ) : (
                 <div className="p-8 text-center text-red-500 bg-white rounded-xl shadow">

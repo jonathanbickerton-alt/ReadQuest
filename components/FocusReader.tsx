@@ -1,16 +1,20 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { AppSettings, StoryChapter } from '../types';
 import { LiveClient } from '../services/liveClient';
-import { Mic, MicOff, ChevronDown, ChevronUp, ChevronRight, PlayCircle } from 'lucide-react';
+import { Mic, MicOff, ChevronDown, ChevronUp, ChevronRight, PlayCircle, ChevronLeft } from 'lucide-react';
 
 interface Props {
   chapter: StoryChapter;
   settings: AppSettings;
   onFinishChapter: (transcript: string, duration: number) => void;
   onMakeChoice: (choice: string) => void;
+  isLatestChapter?: boolean;
+  onPrevChapter?: () => void;
+  onNextChapter?: () => void;
 }
 
-const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMakeChoice }) => {
+const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMakeChoice, isLatestChapter = true, onPrevChapter, onNextChapter }) => {
   const [isLive, setIsLive] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
@@ -126,17 +130,40 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
       
       {/* Sticky Top Bar Controls */}
       <div className="flex-none sticky top-0 z-50 flex items-center justify-between p-4 bg-white/95 backdrop-blur border-b border-gray-200 shadow-sm">
-        <h2 className="text-xl font-bold text-gray-800 truncate max-w-md">{chapter.title}</h2>
-        <button
-          onClick={toggleLive}
-          className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold shadow-sm transition-all ${
-            isLive 
-              ? 'bg-red-100 text-red-600 border border-red-200 hover:bg-red-200 animate-pulse' 
-              : 'bg-green-600 text-white hover:bg-green-700'
-          }`}
-        >
-          {isLive ? <><MicOff size={20}/> Stop & Finish</> : <><Mic size={20}/> Start Reading</>}
-        </button>
+        <div className="flex items-center gap-2">
+            {onPrevChapter && (
+                <button 
+                    onClick={onPrevChapter}
+                    className="p-2 rounded-full hover:bg-gray-100 text-gray-600 transition-colors"
+                    title="Previous Chapter"
+                >
+                    <ChevronLeft size={24} />
+                </button>
+            )}
+            <h2 className="text-xl font-bold text-gray-800 truncate max-w-[200px] md:max-w-md">{chapter.title}</h2>
+        </div>
+        
+        <div className="flex items-center gap-2">
+            {onNextChapter ? (
+                 <button 
+                    onClick={onNextChapter}
+                    className="flex items-center gap-1 px-4 py-2 rounded-full bg-indigo-50 text-indigo-700 font-bold hover:bg-indigo-100 transition-colors"
+                >
+                    Next Chapter <ChevronRight size={20} />
+                </button>
+            ) : (
+                <button
+                onClick={toggleLive}
+                className={`flex items-center gap-2 px-6 py-2 rounded-full font-bold shadow-sm transition-all ${
+                    isLive 
+                    ? 'bg-red-100 text-red-600 border border-red-200 hover:bg-red-200 animate-pulse' 
+                    : 'bg-green-600 text-white hover:bg-green-700'
+                }`}
+                >
+                {isLive ? <><MicOff size={20}/> Stop & Finish</> : <><Mic size={20}/> Start Reading</>}
+                </button>
+            )}
+        </div>
       </div>
 
       {/* Reader Area */}
@@ -165,10 +192,22 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
         {/* Text Content */}
         <div 
             ref={contentRef}
-            className="absolute inset-0 overflow-y-auto p-8 md:p-12 scroll-smooth no-scrollbar"
+            className="absolute inset-0 overflow-y-auto scroll-smooth no-scrollbar"
             style={containerStyle}
         >
-          <div className="max-w-3xl mx-auto pb-64 pt-32"> 
+          {/* Chapter Image Banner */}
+          {chapter.imageUrl && (
+              <div className="w-full h-48 md:h-64 relative mb-6">
+                  <img 
+                    src={chapter.imageUrl} 
+                    alt="Scene" 
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+              </div>
+          )}
+
+          <div className="max-w-3xl mx-auto px-8 md:px-12 pb-64 pt-8"> 
             {/* Padding top/bottom ensures first/last sentences can be centered */}
             {sentences.length > 0 ? sentences.map((sentence, idx) => {
                 
@@ -197,8 +236,8 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
         </div>
       </div>
 
-      {/* Choices (Only show if not reading live) */}
-      {!isLive && chapter.choices && (
+      {/* Choices (Only show if not reading live AND latest chapter) */}
+      {!isLive && isLatestChapter && chapter.choices && (
         <div className="flex-none bg-gray-50 border-t border-gray-200 p-4 z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
             <h3 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">What happens next?</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -217,6 +256,13 @@ const FocusReader: React.FC<Props> = ({ chapter, settings, onFinishChapter, onMa
             ))}
             </div>
         </div>
+      )}
+      
+      {/* Visual Indicator for history mode */}
+      {!isLatestChapter && (
+          <div className="flex-none bg-indigo-50 border-t border-indigo-100 p-3 z-50 text-center text-sm text-indigo-600 font-medium">
+              Viewing past chapter. Navigate forward to continue the story.
+          </div>
       )}
     </div>
   );

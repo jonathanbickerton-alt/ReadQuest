@@ -1,3 +1,4 @@
+
 export interface Character {
   name: string;
   description: string;
@@ -8,6 +9,7 @@ export interface StoryChapter {
   title: string;
   content: string;
   choices?: string[];
+  imageUrl?: string; // Visual representation of the chapter
 }
 
 export interface ReadingStats {
