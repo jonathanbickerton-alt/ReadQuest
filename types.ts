@@ -37,6 +37,7 @@ export interface StoryConfig {
   readingAge: number;
   targetWordCount: number;
   totalChapters: number;
+  visualStyle: string;
 }
 
 export interface GameState {

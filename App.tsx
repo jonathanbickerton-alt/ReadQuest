@@ -1,10 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AppSettings, Character, ReadingSession, StoryChapter, GameState, StoryConfig } from './types';
-import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateImageTweaks, editCharacterImage, generateSceneImage } from './services/gemini';
+import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateSceneImage } from './services/gemini';
 import FocusReader from './components/FocusReader';
 import ParentDashboard from './components/ParentDashboard';
 import SettingsPanel from './components/SettingsPanel';
-import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers } from 'lucide-react';
+import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette } from 'lucide-react';
+
+const VISUAL_STYLES = [
+  { id: 'cartoon', label: 'Vibrant Cartoon', value: 'colorful, vibrant, fun cartoon style', icon: '🎨' },
+  { id: 'anime', label: 'Anime / Ghibli', value: 'anime style, studio ghibli inspired, detailed, soft colors', icon: '🎌' },
+  { id: '3d', label: '3D Animation', value: '3d render, pixar style, cute, high quality, digital art', icon: '🧊' },
+  { id: 'vintage', label: '1930s B&W', value: '1930s rubber hose animation style, black and white, vintage cartoon', icon: '📽️' },
+  { id: 'watercolor', label: 'Watercolor', value: 'soft watercolor painting, artistic, storybook illustration', icon: '🖌️' },
+  { id: 'comic', label: 'Comic Book', value: 'comic book style, bold lines, vibrant colors', icon: '💥' },
+];
 
 export default function App() {
   // --- State ---
@@ -23,13 +32,12 @@ export default function App() {
   const [storyConfig, setStoryConfig] = useState<StoryConfig>({
       readingAge: 8,
       targetWordCount: 500,
-      totalChapters: 10
+      totalChapters: 10,
+      visualStyle: VISUAL_STYLES[0].value
   });
   
   // Creation Flow State
   const [pendingChapter, setPendingChapter] = useState<StoryChapter | null>(null);
-  const [imageTweaks, setImageTweaks] = useState<string[]>([]);
-  const [isRegeneratingImage, setIsRegeneratingImage] = useState(false);
   const [isWritingStory, setIsWritingStory] = useState(false);
   const [generatedWordCount, setGeneratedWordCount] = useState(0);
   const [loadingSceneUrl, setLoadingSceneUrl] = useState<string | null>(null);
@@ -70,7 +78,7 @@ export default function App() {
                     id: parsedOld.id || Date.now().toString(),
                     lastSaved: parsedOld.lastSaved || new Date().toISOString(),
                     // Default config for old saves
-                    storyConfig: parsedOld.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10 }
+                    storyConfig: parsedOld.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10, visualStyle: VISUAL_STYLES[0].value }
                 };
                 currentSaves.push(migratedSave);
                 localStorage.setItem('readquest_saves', JSON.stringify(currentSaves));
@@ -105,11 +113,12 @@ export default function App() {
           totalChapters = 20;
       }
 
-      setStoryConfig({
+      setStoryConfig(prev => ({
+          ...prev,
           readingAge: age,
           targetWordCount: wordCount,
           totalChapters: totalChapters
-      });
+      }));
   };
 
   // --- Handlers ---
@@ -160,7 +169,8 @@ export default function App() {
         setCurrentChapterIndex(game.currentChapterIndex);
         setReadingHistory(game.readingHistory);
         setGeneratedWordCount(game.generatedWordCount);
-        setStoryConfig(game.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10 });
+        // Ensure visualStyle exists if loading old save
+        setStoryConfig(game.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10, visualStyle: VISUAL_STYLES[0].value });
         setCurrentGameId(game.id);
         
         setView('reading');
@@ -192,19 +202,18 @@ export default function App() {
     setCurrentGameId(Date.now().toString()); // Generate new ID for new game
 
     try {
-      // Step 1: Generate Image & Tweaks
-      // Updated to pass reading age for age-appropriate character design
-      const [imgUrl, tweaks] = await Promise.all([
-        generateCharacterImage(charDescInput, storyConfig.readingAge),
-        generateImageTweaks(charDescInput)
-      ]);
+      // Step 1: Generate Image with Style
+      const imgUrl = await generateCharacterImage(
+        charDescInput, 
+        storyConfig.readingAge, 
+        storyConfig.visualStyle
+      );
 
       setCharacter({
         name: charNameInput,
         description: charDescInput,
         imageUrl: imgUrl
       });
-      setImageTweaks(tweaks);
       
       // Move to Review View
       setView('character-review');
@@ -232,22 +241,6 @@ export default function App() {
       console.error("Setup failed", e);
       setErrorMessage(e.message || "Something went wrong starting the adventure. Please try again.");
       setIsLoading(false);
-    }
-  };
-
-  const handleApplyTweak = async (tweak: string) => {
-    if (!character) return;
-    setIsRegeneratingImage(true);
-    try {
-      const newImg = await editCharacterImage(character.imageUrl, tweak);
-      setCharacter({
-        ...character,
-        imageUrl: newImg
-      });
-    } catch (e: any) {
-      setErrorMessage("Failed to edit image: " + e.message);
-    } finally {
-      setIsRegeneratingImage(false);
     }
   };
 
@@ -295,8 +288,12 @@ export default function App() {
 
     try {
         // Start generating the scene summary image immediately (visual context)
-        // Passed character description to ensure visual consistency
-        generateSceneImage(previousContext, character?.description || "").then(url => setLoadingSceneUrl(url));
+        // Passed character description AND style to ensure visual consistency
+        generateSceneImage(
+            previousContext, 
+            character?.description || "", 
+            storyConfig.visualStyle
+        ).then(url => setLoadingSceneUrl(url));
 
         // Start writing the next chapter stream
         const nextChapter = await generateNextChapter(
@@ -394,7 +391,7 @@ export default function App() {
                         <span>15+ yrs</span>
                     </div>
 
-                    {/* Advanced Sliders (Collapsible or just visible) */}
+                    {/* Advanced Sliders */}
                     <div className="mt-4 pt-4 border-t border-indigo-200 grid grid-cols-2 gap-4">
                         <div>
                              <label className="block text-xs font-bold text-gray-600 mb-1 flex items-center gap-1">
@@ -429,6 +426,7 @@ export default function App() {
                     </div>
                 </div>
 
+                {/* Character Name */}
                 <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">Character Name</label>
                 <input 
@@ -439,19 +437,38 @@ export default function App() {
                 />
                 </div>
 
+                {/* Description */}
                 <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">Description</label>
                 <textarea 
                     value={charDescInput}
                     onChange={(e) => setCharDescInput(e.target.value)}
                     placeholder="Describe your hero..."
-                    className="w-full p-4 rounded-xl border-2 border-indigo-100 focus:border-indigo-500 focus:ring-0 text-lg h-32 transition-all resize-none"
+                    className="w-full p-4 rounded-xl border-2 border-indigo-100 focus:border-indigo-500 focus:ring-0 text-lg h-24 transition-all resize-none"
                 />
-                
-                <div className="flex flex-wrap gap-2 mt-3">
-                    <button onClick={() => setCharDescInput("A space explorer with a robotic dog")} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full hover:bg-indigo-100">Space Explorer</button>
-                    <button onClick={() => setCharDescInput("A forest elf who talks to dragons")} className="text-xs bg-green-50 text-green-600 px-3 py-1 rounded-full hover:bg-green-100">Forest Elf</button>
                 </div>
+
+                {/* Art Style Selection */}
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+                    <Palette className="w-4 h-4" /> Art Style
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {VISUAL_STYLES.map((style) => (
+                      <button
+                        key={style.id}
+                        onClick={() => setStoryConfig(prev => ({...prev, visualStyle: style.value}))}
+                        className={`p-2 rounded-lg text-sm font-medium border-2 transition-all flex flex-col items-center gap-1 text-center
+                          ${storyConfig.visualStyle === style.value 
+                            ? 'border-purple-500 bg-purple-50 text-purple-700' 
+                            : 'border-gray-100 hover:border-indigo-200 text-gray-600 bg-white'
+                          }`}
+                      >
+                        <span className="text-xl">{style.icon}</span>
+                        <span className="text-xs">{style.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <button 
@@ -622,13 +639,8 @@ export default function App() {
                 <img 
                     src={character?.imageUrl} 
                     alt={character?.name} 
-                    className={`w-full h-full object-cover transition-opacity duration-300 ${isRegeneratingImage ? 'opacity-50 blur-sm' : 'opacity-100'}`} 
+                    className="w-full h-full object-cover" 
                 />
-                {isRegeneratingImage && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
-                    </div>
-                )}
              </div>
              
              <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 w-64 z-10">
@@ -654,31 +666,22 @@ export default function App() {
              </div>
           </div>
 
-          <div className="space-y-6 mt-8 md:mt-0">
-             <div className="bg-indigo-50 p-6 rounded-2xl">
-                <h3 className="font-bold text-indigo-900 mb-3 flex items-center gap-2">
-                    <Sparkles className="w-5 h-5"/> Perfect the look
+          <div className="space-y-6 mt-8 md:mt-0 text-center md:text-left">
+             <div>
+                <h3 className="text-2xl font-bold text-indigo-900 mb-2">{character?.name}</h3>
+                <p className="text-gray-600 italic">"{character?.description}"</p>
+             </div>
+             
+             <div className="bg-indigo-50 p-6 rounded-2xl text-left">
+                <h3 className="font-bold text-indigo-900 mb-2 flex items-center gap-2">
+                    <Sparkles className="w-5 h-5"/> Ready for adventure?
                 </h3>
-                <p className="text-sm text-indigo-700 mb-4">Click an option below to adjust the image, or just start reading if you love it!</p>
-                
-                <div className="space-y-2">
-                    {imageTweaks.map((tweak, i) => (
-                        <button
-                            key={i}
-                            onClick={() => handleApplyTweak(tweak)}
-                            disabled={isRegeneratingImage}
-                            className="w-full text-left p-3 bg-white hover:bg-indigo-100 border border-indigo-100 rounded-xl transition-colors flex items-center gap-3 text-sm font-medium text-gray-700 disabled:opacity-50"
-                        >
-                            <Edit2 className="w-4 h-4 text-indigo-400"/>
-                            {tweak}
-                        </button>
-                    ))}
-                </div>
+                <p className="text-sm text-indigo-700 mb-4">Your character is ready and the first chapter is being written just for you.</p>
              </div>
 
              <button 
                 onClick={handleConfirmAdventure}
-                disabled={!pendingChapter || isRegeneratingImage}
+                disabled={!pendingChapter}
                 className="w-full py-4 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold text-xl shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:bg-gray-300 disabled:cursor-not-allowed disabled:transform-none"
              >
                 {isWritingStory ? 'Writing Chapter 1...' : 'Start Adventure!'} <Play fill="currentColor" />

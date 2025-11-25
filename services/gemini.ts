@@ -25,19 +25,19 @@ const cleanAndParseJSON = (text: string): any => {
 };
 
 // --- Image Generation ---
-export const generateCharacterImage = async (description: string, age: number): Promise<string> => {
+export const generateCharacterImage = async (description: string, age: number, style: string): Promise<string> => {
   try {
-    const stylePrompt = age < 7 
-      ? "cute, simple, soft colors, nursery rhyme style" 
-      : age < 10 
-        ? "colorful, cartoon style, vibrant" 
-        : "detailed, comic book or fantasy art style";
-
+    // Combine age hint with the selected style
+    const ageHint = age < 7 ? "simple, cute" : "detailed";
+    
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
         parts: [
-          { text: `Create a character illustration matching this description: ${description}. Style: ${stylePrompt}. The character should be on a plain or simple background. Ensure high quality.` }
+          { text: `Create a character illustration matching this description: ${description}. 
+            Style: ${style}. 
+            Additional Context: ${ageHint}. 
+            The character should be on a plain or simple background. Ensure high quality.` }
         ]
       },
     });
@@ -56,84 +56,19 @@ export const generateCharacterImage = async (description: string, age: number): 
   }
 };
 
-export const editCharacterImage = async (currentImageBase64: string, instruction: string): Promise<string> => {
-  try {
-    const base64Data = currentImageBase64.split(',')[1];
-    const mimeType = currentImageBase64.split(';')[0].split(':')[1];
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType,
-              data: base64Data
-            }
-          },
-          { text: `Edit this image: ${instruction}. Keep the same style.` }
-        ]
-      },
-    });
-
-    for (const candidate of response.candidates || []) {
-      for (const part of candidate.content.parts) {
-        if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
-          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-        }
-      }
-    }
-    throw new Error("No image generated in edit response");
-  } catch (error: any) {
-    console.error("Image edit error:", error);
-    throw new Error(`Image editing failed: ${error.message || error}`);
-  }
-};
-
-export const generateImageTweaks = async (description: string): Promise<string[]> => {
-  const prompt = `Based on this character description: "${description}", suggest 3 distinct, simple visual modifications or specific details a user might want to add or change to refine the character image.
-  
-  IMPORTANT: 
-  - DO NOT suggest features that are already explicitly mentioned in the description.
-  - Suggest NEW accessories, background changes, or style adjustments.
-  
-  Examples of good tweaks: "Add a red hat", "Make it pixel art style", "Give them sunglasses", "Change background to a forest".
-  Output ONLY a JSON array of 3 strings.`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING }
-        }
-      }
-    });
-    
-    return cleanAndParseJSON(response.text || "[]") || ["Add a hat", "Make it brighter", "Change background"];
-  } catch (e) {
-    return ["Make it cartoon style", "Add a cool accessory", "Change the background"];
-  }
-};
-
-export const generateSceneImage = async (previousChapterContent: string, characterDescription: string): Promise<string> => {
+export const generateSceneImage = async (previousChapterContent: string, characterDescription: string, style: string): Promise<string> => {
     try {
-        // Step 1: Summarize context into a visual scene description
-        const summaryResponse = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: `Summarize the following story chapter into a maximum of 2 sentences describing the visual scene for an illustration. Focus on the setting and the main character's action. \n\nChapter: ${previousChapterContent.substring(0, 5000)}`
-        });
-        const sceneDescription = summaryResponse.text || "A magical adventure scene";
+        // Optimization: Consolidated Summary + Generation into a single call.
+        // We trim the context to the last ~1500 characters to keep payload light for the image model.
+        const context = previousChapterContent.length > 1500 
+            ? "..." + previousChapterContent.slice(-1500) 
+            : previousChapterContent;
 
-        // Step 2: Generate the image
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
             contents: {
                 parts: [
-                    { text: `Create a colorful children's book illustration for this scene: ${sceneDescription}. \n\nIMPORTANT - Include the main character in the scene based on this description: ${characterDescription}. \n\nKeep the style consistent, friendly and vibrant.` }
+                    { text: `Draw a children's book illustration based on this story excerpt: "${context}". \n\nIMPORTANT: Include the main character: ${characterDescription}. \n\nStyle: ${style}.` }
                 ]
             },
         });
@@ -145,7 +80,7 @@ export const generateSceneImage = async (previousChapterContent: string, charact
                 }
             }
         }
-        return ""; // Fallback handled in UI
+        return ""; 
     } catch (e) {
         console.error("Scene generation failed", e);
         return "";
@@ -159,7 +94,7 @@ export const generateStoryStart = async (
     config: StoryConfig, 
     onProgress?: (count: number) => void
 ): Promise<StoryChapter> => {
-  // Using Gemini 3 Pro for higher quality creative writing
+  // Optimization: Switched from gemini-3-pro-preview to gemini-2.5-flash for speed and higher rate limits
   const prompt = `Write the first chapter of a children's adventure story about a hero named ${charName} who is ${charDesc}. 
   
   CONFIGURATION:
@@ -182,7 +117,7 @@ export const generateStoryStart = async (
   }`;
 
   const responseStream = await ai.models.generateContentStream({
-    model: 'gemini-3-pro-preview', 
+    model: 'gemini-2.5-flash', 
     contents: prompt,
     config: {
       maxOutputTokens: 8192,
@@ -219,8 +154,8 @@ export const generateNextChapter = async (
     onProgress?: (count: number) => void
 ): Promise<StoryChapter> => {
   
-  const isPenultimate = currentChapterIndex === config.totalChapters - 2; // e.g., if total 5, index 3 is penultimate (Chapter 4)
-  const isFinal = currentChapterIndex === config.totalChapters - 1; // e.g., if total 5, index 4 is final (Chapter 5)
+  const isPenultimate = currentChapterIndex === config.totalChapters - 2; 
+  const isFinal = currentChapterIndex === config.totalChapters - 1; 
 
   let narrativeInstruction = "";
   if (isPenultimate) {
@@ -255,11 +190,11 @@ export const generateNextChapter = async (
     "choices": ${isFinal ? "[]" : `["Option 1", "Option 2", "Option 3"]`}
   }`;
 
-  // Limit context
+  // Limit context to save tokens, though Flash has a large context window, reducing payload helps latency.
   const trimmedContext = previousContext.length > 20000 ? "..." + previousContext.slice(-20000) : previousContext;
 
   const responseStream = await ai.models.generateContentStream({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-2.5-flash',
     contents: [
         { role: 'user', parts: [{ text: `Previous story context: ${trimmedContext}` }] },
         { role: 'user', parts: [{ text: prompt }] }
