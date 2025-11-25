@@ -90,17 +90,22 @@ const queryCloudflareWorker = async (prompt: string): Promise<string> => {
 };
 
 export const generateCharacterImage = async (name: string, description: string, style: string): Promise<string> => {
-  const prompt = `character design of ${name}, ${description}, ${style} style, white background high quality`;
+  // Flux.1 Schnell Prompt Engineering:
+  // Uses natural language structures. Style first, then Subject, then Details.
+  const prompt = `Create a character design in the style of: ${style}. Character Name: ${name}. Description: ${description}. Setting: Isolated on a pure white background. View: Full body. Quality: Masterpiece, high resolution, sharp focus.`;
   return queryCloudflareWorker(prompt);
 };
 
 export const generateSceneImage = async (previousChapterContent: string, characterDescription: string, style: string): Promise<string> => {
-    // Truncate heavily to keep prompt clean
-    const context = previousChapterContent.length > 100 
-        ? previousChapterContent.slice(0, 100)
-        : previousChapterContent;
+    // Flux handles longer context well. Clean newlines to save tokens/url length but keep flow.
+    const cleanContext = previousChapterContent.replace(/\s+/g, ' ');
     
-    const prompt = `story illustration ${context} ${style} ${characterDescription} magical detailed`;
+    // Increase context window to 350 chars for better narrative understanding
+    const context = cleanContext.length > 350 
+        ? cleanContext.slice(0, 350) + "..."
+        : cleanContext;
+    
+    const prompt = `Create a story illustration in the style of: ${style}. Scene Description: ${context}. The main character is present, looking like: ${characterDescription}. Quality: Cinematic lighting, detailed background, dynamic composition, 8k resolution.`;
     return queryCloudflareWorker(prompt);
 }
 
