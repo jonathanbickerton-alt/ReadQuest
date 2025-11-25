@@ -30,6 +30,7 @@ export const generateCharacterImage = async (description: string, age: number, s
     // Combine age hint with the selected style
     const ageHint = age < 7 ? "simple, cute" : "detailed";
     
+    // Note: Image generation does not have a "Lite" variant. We use the standard flash-image.
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
@@ -94,7 +95,7 @@ export const generateStoryStart = async (
     config: StoryConfig, 
     onProgress?: (count: number) => void
 ): Promise<StoryChapter> => {
-  // Optimization: Switched from gemini-3-pro-preview to gemini-2.5-flash for speed and higher rate limits
+  // Use Gemini 3 Pro for high quality storytelling
   const prompt = `Write the first chapter of a children's adventure story about a hero named ${charName} who is ${charDesc}. 
   
   CONFIGURATION:
@@ -117,7 +118,7 @@ export const generateStoryStart = async (
   }`;
 
   const responseStream = await ai.models.generateContentStream({
-    model: 'gemini-2.5-flash', 
+    model: 'gemini-3-pro-preview', 
     contents: prompt,
     config: {
       maxOutputTokens: 8192,
@@ -194,7 +195,7 @@ export const generateNextChapter = async (
   const trimmedContext = previousContext.length > 20000 ? "..." + previousContext.slice(-20000) : previousContext;
 
   const responseStream = await ai.models.generateContentStream({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-pro-preview',
     contents: [
         { role: 'user', parts: [{ text: `Previous story context: ${trimmedContext}` }] },
         { role: 'user', parts: [{ text: prompt }] }
@@ -242,7 +243,7 @@ export const calculateReadingScore = async (originalText: string, transcribedTex
   Return JSON.`;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-flash-lite-latest',
     contents: prompt,
     config: {
       responseMimeType: "application/json",
