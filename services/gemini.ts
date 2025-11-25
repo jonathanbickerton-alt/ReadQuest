@@ -24,79 +24,161 @@ const cleanAndParseJSON = (text: string): any => {
   }
 };
 
-// --- Image Generation ---
-export const generateCharacterImage = async (description: string, age: number, style: string): Promise<string> => {
+// --- Flux Image Generation (External) ---
+
+// Rate Limit Configuration for Flux (6 images per minute)
+const FLUX_TIMESTAMPS: number[] = [];
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute in ms
+const MAX_REQUESTS_PER_MINUTE = 6;
+
+const waitForRateLimit = async () => {
+  while (true) {
+    const now = Date.now();
+    // 1. Remove timestamps that are older than the 1-minute window
+    while (FLUX_TIMESTAMPS.length > 0 && FLUX_TIMESTAMPS[0] < now - RATE_LIMIT_WINDOW) {
+      FLUX_TIMESTAMPS.shift();
+    }
+
+    // 2. Check if we have slot available
+    if (FLUX_TIMESTAMPS.length < MAX_REQUESTS_PER_MINUTE) {
+      FLUX_TIMESTAMPS.push(now);
+      return; // Proceed
+    }
+
+    // 3. If limit reached, calculate wait time based on the oldest request
+    const oldestRequestTime = FLUX_TIMESTAMPS[0];
+    const timeUntilExpiry = (oldestRequestTime + RATE_LIMIT_WINDOW) - now;
+    const waitTime = Math.max(100, timeUntilExpiry + 100); // Wait until it expires + buffer
+
+    console.log(`Flux Rate Limit Reached (6/min). Waiting ${Math.ceil(waitTime / 1000)}s...`);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+};
+
+const queryFlux = async (prompt: string): Promise<string> => {
+  await waitForRateLimit();
+
+  const hfKey = process.env.HUGGING_FACE_API_KEY;
+  
+  // Construct headers dynamically to avoid sending empty Authorization
+  const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-use-cache": "false"
+  };
+  
+  if (hfKey) {
+      headers["Authorization"] = `Bearer ${hfKey}`;
+  }
+
   try {
-    // Combine age hint with the selected style
-    const ageHint = age < 7 ? "simple, cute" : "detailed";
-    
-    // Reverting to gemini-2.5-flash-image for wider availability/permissions
+      const response = await fetch(
+          "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+          {
+              headers,
+              method: "POST",
+              body: JSON.stringify({ inputs: prompt }),
+          }
+      );
+
+      if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Flux API Error (${response.status}): ${errText}`);
+      }
+
+      const blob = await response.blob();
+      
+      // Convert Blob to Base64 Data URL
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+              if (typeof reader.result === 'string') {
+                  resolve(reader.result);
+              } else {
+                  reject(new Error("Failed to convert image blob to string"));
+              }
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
+
+  } catch (error: any) {
+      console.warn("Flux Generation Failed (falling back to Gemini):", error);
+      throw error;
+  }
+};
+
+// --- Gemini Image Gen Fallback ---
+const generateImageGemini = async (prompt: string): Promise<string> => {
+  try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [
-          { text: `Create a character illustration matching this description: ${description}. 
-            Style: ${style}. 
-            Additional Context: ${ageHint}. 
-            The character should be on a plain or simple background. Ensure high quality.` }
-        ]
-      },
+      contents: { parts: [{ text: prompt }] },
     });
-
-    for (const candidate of response.candidates || []) {
-      for (const part of candidate.content.parts) {
-        if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
-          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+        if (part.inlineData && part.inlineData.data) {
+            return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
         }
-      }
     }
-    throw new Error("No image generated in response");
-  } catch (error: any) {
-    console.error("Image gen error:", error);
-    throw new Error(`Image generation failed: ${error.message || error}`);
+    throw new Error("No image data found in Gemini response");
+  } catch (e) {
+      console.error("Gemini Image Gen Failed:", e);
+      throw e;
+  }
+};
+
+export const generateCharacterImage = async (description: string, age: number, style: string): Promise<string> => {
+  // Try Flux first
+  try {
+      const fluxPrompt = `A high-quality children's book character illustration. 
+      Character Description: ${description}.
+      Art Style: ${style}.
+      Context: Isolated character on a plain white background, full body, expressive, cute.`;
+      
+      return await queryFlux(fluxPrompt);
+  } catch (e) {
+      // Fallback to Gemini 2.5 Flash if Flux fails (e.g. CORS, no key, network)
+      const geminiPrompt = `Draw a children's book character. 
+      Description: ${description}. 
+      Style: ${style}. 
+      Keep it on a white background.`;
+      return await generateImageGemini(geminiPrompt);
   }
 };
 
 export const generateSceneImage = async (previousChapterContent: string, characterDescription: string, style: string): Promise<string> => {
+    // Truncate context to keep prompt concise
+    const context = previousChapterContent.length > 500 
+        ? previousChapterContent.slice(0, 500) + "..." 
+        : previousChapterContent;
+    const cleanContext = context.replace(/\s+/g, ' ').trim();
+
+    // Try Flux first
     try {
-        // Optimization: Consolidated Summary + Generation into a single call.
-        // We trim the context to the last ~1500 characters to keep payload light for the image model.
-        const context = previousChapterContent.length > 1500 
-            ? "..." + previousChapterContent.slice(-1500) 
-            : previousChapterContent;
+        const fluxPrompt = `Children's book illustration. 
+        Art Style: ${style}.
+        Scene Description: ${cleanContext}.
+        Main Character Details: ${characterDescription}.
+        Mood: Magical, storytelling, detailed, vibrant.`;
 
-        // Reverting to gemini-2.5-flash-image for wider availability/permissions
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [
-                    { text: `Draw a children's book illustration based on this story excerpt: "${context}". \n\nIMPORTANT: Include the main character: ${characterDescription}. \n\nStyle: ${style}.` }
-                ]
-            },
-        });
-
-        for (const candidate of response.candidates || []) {
-            for (const part of candidate.content.parts) {
-                if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
-                    return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-                }
-            }
-        }
-        return ""; 
+        return await queryFlux(fluxPrompt);
     } catch (e) {
-        console.error("Scene generation failed", e);
-        return "";
+        // Fallback to Gemini 2.5 Flash
+        const geminiPrompt = `Create an illustration for a children's story.
+        Style: ${style}.
+        Scene: ${cleanContext}.
+        Include character matching: ${characterDescription}`;
+        return await generateImageGemini(geminiPrompt);
     }
 }
 
-// --- Story Generation ---
+// --- Story Generation (Gemini 3 Pro) ---
 export const generateStoryStart = async (
     charName: string, 
     charDesc: string, 
     config: StoryConfig, 
     onProgress?: (count: number) => void
 ): Promise<StoryChapter> => {
-  // Use Gemini 3 Pro for high quality storytelling
   const prompt = `Write the first chapter of a children's adventure story about a hero named ${charName} who is ${charDesc}. 
   
   CONFIGURATION:
@@ -228,7 +310,7 @@ export const generateNextChapter = async (
   };
 };
 
-// --- Scoring Logic ---
+// --- Scoring Logic (Gemini 3 Pro) ---
 export const calculateReadingScore = async (originalText: string, transcribedText: string, durationSeconds: number): Promise<ReadingStats> => {
   const prompt = `You are a reading tutor. 
   Original Text: "${originalText.substring(0, 1000)}..." (truncated)
