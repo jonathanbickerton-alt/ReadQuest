@@ -4,7 +4,7 @@ import { generateCharacterImage, generateStoryStart, generateNextChapter, calcul
 import FocusReader from './components/FocusReader';
 import ParentDashboard from './components/ParentDashboard';
 import SettingsPanel from './components/SettingsPanel';
-import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette } from 'lucide-react';
+import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette, Maximize2 } from 'lucide-react';
 
 const VISUAL_STYLES = [
   { id: 'cartoon', label: 'Vibrant Cartoon', value: 'colorful, vibrant, fun cartoon style', icon: '🎨' },
@@ -51,6 +51,7 @@ export default function App() {
   const [charNameInput, setCharNameInput] = useState('');
   const [charDescInput, setCharDescInput] = useState('');
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [expandedImage, setExpandedImage] = useState<string | null>(null);
   
   // Save Management State
   const [savedGames, setSavedGames] = useState<GameState[]>([]);
@@ -635,12 +636,18 @@ export default function App() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
           <div className="relative group mx-auto w-full flex justify-center">
-             <div className="relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden shadow-2xl border-4 border-white ring-4 ring-indigo-50">
+             <div 
+                className="relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden shadow-2xl border-4 border-white ring-4 ring-indigo-50 cursor-zoom-in group-hover:ring-indigo-200 transition-all"
+                onClick={() => character?.imageUrl && setExpandedImage(character.imageUrl)}
+             >
                 <img 
                     src={character?.imageUrl} 
                     alt={character?.name} 
                     className="w-full h-full object-cover" 
                 />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                     <Maximize2 className="text-white opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all w-12 h-12 drop-shadow-md" />
+                </div>
              </div>
              
              <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 w-64 z-10">
@@ -759,7 +766,15 @@ export default function App() {
             {/* Sidebar - Scrollable independently if needed */}
             <div className="lg:col-span-3 space-y-6 overflow-y-auto h-full hidden lg:block pb-4 pr-2">
               <div className="bg-white p-4 rounded-2xl shadow-lg border border-indigo-100 text-center">
-                <img src={character.imageUrl} alt={character.name} className="w-32 h-32 rounded-full mx-auto mb-3 object-cover border-4 border-indigo-100 shadow-sm" />
+                <div 
+                    className="relative group w-32 h-32 mx-auto mb-3 cursor-zoom-in"
+                    onClick={() => character?.imageUrl && setExpandedImage(character.imageUrl)}
+                >
+                    <img src={character.imageUrl} alt={character.name} className="w-full h-full rounded-full object-cover border-4 border-indigo-100 shadow-sm" />
+                    <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                         <Maximize2 className="text-white opacity-0 group-hover:opacity-100 w-8 h-8 drop-shadow-md" />
+                    </div>
+                </div>
                 <h3 className="font-bold text-lg text-gray-800">{character.name}</h3>
                 <p className="text-xs text-gray-500 mt-1 line-clamp-3">{character.description}</p>
               </div>
@@ -846,6 +861,27 @@ export default function App() {
 
         {view === 'parents' && (
           <ParentDashboard history={getAllReadingSessions} />
+        )}
+
+        {/* Expanded Image Modal */}
+        {expandedImage && (
+            <div 
+                className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+                onClick={() => setExpandedImage(null)}
+            >
+                <button 
+                    onClick={() => setExpandedImage(null)}
+                    className="absolute top-4 right-4 text-white/70 hover:text-white p-2 hover:bg-white/10 rounded-full transition-colors"
+                >
+                    <X className="w-8 h-8" />
+                </button>
+                <img 
+                    src={expandedImage} 
+                    alt="Expanded Character" 
+                    className="max-w-full max-h-full object-contain rounded-lg shadow-2xl scale-100 animate-in zoom-in-95 duration-200 select-none"
+                    onClick={(e) => e.stopPropagation()} 
+                />
+            </div>
         )}
       </main>
     </div>

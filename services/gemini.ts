@@ -30,7 +30,7 @@ export const generateCharacterImage = async (description: string, age: number, s
     // Combine age hint with the selected style
     const ageHint = age < 7 ? "simple, cute" : "detailed";
     
-    // Note: Image generation does not have a "Lite" variant. We use the standard flash-image.
+    // Reverting to gemini-2.5-flash-image for wider availability/permissions
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash-image',
       contents: {
@@ -65,6 +65,7 @@ export const generateSceneImage = async (previousChapterContent: string, charact
             ? "..." + previousChapterContent.slice(-1500) 
             : previousChapterContent;
 
+        // Reverting to gemini-2.5-flash-image for wider availability/permissions
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
             contents: {
@@ -242,8 +243,9 @@ export const calculateReadingScore = async (originalText: string, transcribedTex
 
   Return JSON.`;
 
+  // Updated to use Gemini 3 Pro Preview for deeper analysis
   const response = await ai.models.generateContent({
-    model: 'gemini-flash-lite-latest',
+    model: 'gemini-3-pro-preview',
     contents: prompt,
     config: {
       responseMimeType: "application/json",
