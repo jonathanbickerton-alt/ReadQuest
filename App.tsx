@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AppSettings, Character, ReadingSession, StoryChapter, GameState, StoryConfig } from './types';
-import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateSceneImage } from './services/gemini';
+import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateSceneImage, getPlaceholderImage } from './services/gemini';
 import FocusReader from './components/FocusReader';
 import ParentDashboard from './components/ParentDashboard';
 import SettingsPanel from './components/SettingsPanel';
-import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette, Maximize2 } from 'lucide-react';
+import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette, Maximize2, RefreshCw } from 'lucide-react';
 
 const VISUAL_STYLES = [
   { id: 'cartoon', label: 'Vibrant Cartoon', value: 'colorful, vibrant, fun cartoon style', icon: '🎨' },
@@ -52,6 +53,12 @@ export default function App() {
   const [charDescInput, setCharDescInput] = useState('');
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+  
+  // Image Loading Handling
+  const [displaySrc, setDisplaySrc] = useState<string | null>(null);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  // Ref to track loading state synchronously inside timeouts without stale closures
+  const isImageLoadedRef = useRef(false);
   
   // Save Management State
   const [savedGames, setSavedGames] = useState<GameState[]>([]);
@@ -120,6 +127,32 @@ export default function App() {
           targetWordCount: wordCount,
           totalChapters: totalChapters
       }));
+  };
+
+  // Sync displaySrc with character.imageUrl and handle timeouts
+  useEffect(() => {
+    if (character?.imageUrl) {
+        setDisplaySrc(character.imageUrl);
+        setImageLoaded(false);
+        isImageLoadedRef.current = false;
+
+        // Safety timeout: If image doesn't load in 30 seconds, force placeholder
+        const timeout = setTimeout(() => {
+            // Check the Ref, not the state, to avoid stale closure issues
+            if (!isImageLoadedRef.current) {
+                console.warn("Image load timeout, forcing placeholder");
+                setDisplaySrc(getPlaceholderImage("Connection Slow"));
+                setImageLoaded(true);
+            }
+        }, 30000); // Increased to 30s
+
+        return () => clearTimeout(timeout);
+    }
+  }, [character?.imageUrl]);
+
+  const handleImageLoad = () => {
+    setImageLoaded(true);
+    isImageLoadedRef.current = true;
   };
 
   // --- Handlers ---
@@ -204,9 +237,10 @@ export default function App() {
 
     try {
       // Step 1: Generate Image with Style
+      // Calls Cloudflare Worker via service
       const imgUrl = await generateCharacterImage(
+        charNameInput,
         charDescInput, 
-        storyConfig.readingAge, 
         storyConfig.visualStyle
       );
 
@@ -242,6 +276,31 @@ export default function App() {
       console.error("Setup failed", e);
       setErrorMessage(e.message || "Something went wrong starting the adventure. Please try again.");
       setIsLoading(false);
+    }
+  };
+
+  const handleRegenerateImage = async () => {
+    if (!character) return;
+    setDisplaySrc(null); // Clear current
+    setImageLoaded(false);
+    isImageLoadedRef.current = false;
+    setExpandedImage(null);
+    
+    // Force spinner state by clearing valid src
+    try {
+        const newUrl = await generateCharacterImage(
+            character.name,
+            character.description, 
+            storyConfig.visualStyle
+        );
+        // Update character state with new URL
+        setCharacter(prev => prev ? ({ ...prev, imageUrl: newUrl }) : null);
+        // DisplaySrc updates via useEffect
+    } catch (e) {
+        console.error("Regen failed", e);
+        setDisplaySrc(getPlaceholderImage("Regeneration Failed"));
+        setImageLoaded(true);
+        isImageLoadedRef.current = true;
     }
   };
 
@@ -314,6 +373,14 @@ export default function App() {
     } finally {
         setIsLoading(false);
     }
+  };
+
+  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+    console.error("Image failed to load:", e.currentTarget.src);
+    e.currentTarget.onerror = null; 
+    setDisplaySrc(getPlaceholderImage("Image Unavailable"));
+    setImageLoaded(true);
+    isImageLoadedRef.current = true;
   };
 
   // --- Helpers ---
@@ -552,7 +619,12 @@ export default function App() {
                         >
                             {/* Thumbnail */}
                             <div className="w-24 h-24 flex-shrink-0 rounded-xl overflow-hidden bg-gray-100">
-                                <img src={game.character.imageUrl} alt={game.character.name} className="w-full h-full object-cover" />
+                                <img 
+                                    src={game.character.imageUrl} 
+                                    alt={game.character.name} 
+                                    className="w-full h-full object-cover" 
+                                    onError={(e) => e.currentTarget.src = getPlaceholderImage(game.character.name)}
+                                />
                             </div>
 
                             {/* Info */}
@@ -637,16 +709,45 @@ export default function App() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
           <div className="relative group mx-auto w-full flex justify-center">
              <div 
-                className="relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden shadow-2xl border-4 border-white ring-4 ring-indigo-50 cursor-zoom-in group-hover:ring-indigo-200 transition-all"
-                onClick={() => character?.imageUrl && setExpandedImage(character.imageUrl)}
+                className="relative w-64 h-64 md:w-80 md:h-80 rounded-2xl overflow-hidden shadow-2xl border-4 border-white ring-4 ring-indigo-50 cursor-zoom-in group-hover:ring-indigo-200 transition-all bg-gray-100"
+                onClick={() => displaySrc && setExpandedImage(displaySrc)}
              >
-                <img 
-                    src={character?.imageUrl} 
-                    alt={character?.name} 
-                    className="w-full h-full object-cover" 
-                />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
-                     <Maximize2 className="text-white opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all w-12 h-12 drop-shadow-md" />
+                {/* Visual Loading Indicator for Image Fetching */}
+                {!imageLoaded && (
+                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-gray-50 text-indigo-500">
+                        <Loader2 className="w-10 h-10 animate-spin mb-3 text-indigo-400" />
+                        <div className="w-32 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                             <div className="h-full bg-indigo-500 animate-[loading_1s_ease-in-out_infinite]" style={{width: '100%'}}></div>
+                        </div>
+                        <span className="text-xs font-semibold mt-2 text-indigo-400 animate-pulse">Developing Photo...</span>
+                    </div>
+                )}
+                
+                {displaySrc && (
+                    <img 
+                        src={displaySrc} 
+                        alt={character?.name} 
+                        className={`w-full h-full object-cover transition-opacity duration-500 ${imageLoaded ? 'opacity-100' : 'opacity-0'}`} 
+                        onLoad={handleImageLoad}
+                        onError={handleImageError}
+                    />
+                )}
+                
+                {imageLoaded && (
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                        <Maximize2 className="text-white opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all w-12 h-12 drop-shadow-md" />
+                    </div>
+                )}
+                
+                {/* Regenerate Button Overlay */}
+                <div className="absolute top-2 right-2 z-30">
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); handleRegenerateImage(); }}
+                        className="p-2 bg-white/90 hover:bg-white text-indigo-600 rounded-full shadow-lg border border-indigo-100 hover:rotate-180 transition-all duration-500"
+                        title="Regenerate Image"
+                    >
+                        <RefreshCw className="w-5 h-5" />
+                    </button>
                 </div>
              </div>
              
@@ -768,9 +869,14 @@ export default function App() {
               <div className="bg-white p-4 rounded-2xl shadow-lg border border-indigo-100 text-center">
                 <div 
                     className="relative group w-32 h-32 mx-auto mb-3 cursor-zoom-in"
-                    onClick={() => character?.imageUrl && setExpandedImage(character.imageUrl)}
+                    onClick={() => displaySrc && setExpandedImage(displaySrc)}
                 >
-                    <img src={character.imageUrl} alt={character.name} className="w-full h-full rounded-full object-cover border-4 border-indigo-100 shadow-sm" />
+                    <img 
+                        src={displaySrc || character.imageUrl} 
+                        alt={character.name} 
+                        className="w-full h-full rounded-full object-cover border-4 border-indigo-100 shadow-sm"
+                        onError={(e) => e.currentTarget.src = getPlaceholderImage(character.name)}
+                    />
                     <div className="absolute inset-0 rounded-full bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
                          <Maximize2 className="text-white opacity-0 group-hover:opacity-100 w-8 h-8 drop-shadow-md" />
                     </div>
@@ -817,7 +923,12 @@ export default function App() {
                       {/* Scene Preview */}
                       <div className="w-64 h-64 mx-auto rounded-2xl overflow-hidden shadow-xl bg-gray-200 border-4 border-white relative">
                           {loadingSceneUrl ? (
-                              <img src={loadingSceneUrl} className="w-full h-full object-cover animate-in fade-in duration-500" alt="Scene preview" />
+                              <img 
+                                src={loadingSceneUrl} 
+                                className="w-full h-full object-cover animate-in fade-in duration-500" 
+                                alt="Scene preview" 
+                                onError={(e) => e.currentTarget.src = getPlaceholderImage("Scene Loading...")}
+                              />
                           ) : (
                               <div className="w-full h-full flex items-center justify-center">
                                   <Loader2 className="w-12 h-12 text-gray-400 animate-spin" />
@@ -880,6 +991,7 @@ export default function App() {
                     alt="Expanded Character" 
                     className="max-w-full max-h-full object-contain rounded-lg shadow-2xl scale-100 animate-in zoom-in-95 duration-200 select-none"
                     onClick={(e) => e.stopPropagation()} 
+                    onError={(e) => e.currentTarget.src = getPlaceholderImage("Image Failed")}
                 />
             </div>
         )}

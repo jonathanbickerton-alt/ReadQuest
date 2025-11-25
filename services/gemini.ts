@@ -24,152 +24,84 @@ const cleanAndParseJSON = (text: string): any => {
   }
 };
 
-// --- Flux Image Generation (External) ---
+// --- Helper: Blob to Base64 ---
+const blobToBase64 = (blob: Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error("Failed to convert blob to string"));
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+};
 
-// Rate Limit Configuration for Flux (6 images per minute)
-const FLUX_TIMESTAMPS: number[] = [];
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute in ms
-const MAX_REQUESTS_PER_MINUTE = 6;
-
-const waitForRateLimit = async () => {
-  while (true) {
-    const now = Date.now();
-    // 1. Remove timestamps that are older than the 1-minute window
-    while (FLUX_TIMESTAMPS.length > 0 && FLUX_TIMESTAMPS[0] < now - RATE_LIMIT_WINDOW) {
-      FLUX_TIMESTAMPS.shift();
-    }
-
-    // 2. Check if we have slot available
-    if (FLUX_TIMESTAMPS.length < MAX_REQUESTS_PER_MINUTE) {
-      FLUX_TIMESTAMPS.push(now);
-      return; // Proceed
-    }
-
-    // 3. If limit reached, calculate wait time based on the oldest request
-    const oldestRequestTime = FLUX_TIMESTAMPS[0];
-    const timeUntilExpiry = (oldestRequestTime + RATE_LIMIT_WINDOW) - now;
-    const waitTime = Math.max(100, timeUntilExpiry + 100); // Wait until it expires + buffer
-
-    console.log(`Flux Rate Limit Reached (6/min). Waiting ${Math.ceil(waitTime / 1000)}s...`);
-    await new Promise(resolve => setTimeout(resolve, waitTime));
+// --- Fallback Placeholder (SVG) ---
+export const getPlaceholderImage = (text: string, bgColor: string = "#e0e7ff", textColor: string = "#4338ca"): string => {
+  // Safe base64 encoding that handles unicode
+  const safeText = text.replace(/[^\w\s]/gi, ''); // Strip special chars for the SVG text to be safe
+  const svg = `
+  <svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100%" height="100%" fill="${bgColor}"/>
+    <text x="50%" y="45%" font-family="sans-serif" font-size="48" font-weight="bold" fill="${textColor}" text-anchor="middle" dominant-baseline="middle">
+      ${safeText}
+    </text>
+    <text x="50%" y="60%" font-family="sans-serif" font-size="24" fill="${textColor}" text-anchor="middle" dominant-baseline="middle" opacity="0.6">
+      (Image unavailable)
+    </text>
+  </svg>`;
+  
+  try {
+      return `data:image/svg+xml;base64,${btoa(svg)}`;
+  } catch (e) {
+      // Fallback if btoa fails (rare)
+      return `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZTBlN2ZmIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIiBmb250LXNpemU9IjMyIiBmaWxsPSIjNDMzOGNhIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIj5JbWFnZSBFcnJvcjwvdGV4dD48L3N2Zz4=`;
   }
 };
 
-const queryFlux = async (prompt: string): Promise<string> => {
-  await waitForRateLimit();
 
-  const hfKey = process.env.HUGGING_FACE_API_KEY;
-  
-  // Construct headers dynamically to avoid sending empty Authorization
-  const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "x-use-cache": "false"
-  };
-  
-  if (hfKey) {
-      headers["Authorization"] = `Bearer ${hfKey}`;
-  }
+// --- Cloudflare Worker Image Generation Service ---
 
-  try {
-      const response = await fetch(
-          "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-          {
-              headers,
-              method: "POST",
-              body: JSON.stringify({ inputs: prompt }),
-          }
-      );
+const queryCloudflareWorker = async (prompt: string): Promise<string> => {
+    try {
+        console.log("Generating image with prompt:", prompt);
+        const response = await fetch(
+            `https://readquestimagen.jonathan-bickerton.workers.dev/?prompt=${encodeURIComponent(prompt)}`
+        );
 
-      if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Flux API Error (${response.status}): ${errText}`);
-      }
-
-      const blob = await response.blob();
-      
-      // Convert Blob to Base64 Data URL
-      return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-              if (typeof reader.result === 'string') {
-                  resolve(reader.result);
-              } else {
-                  reject(new Error("Failed to convert image blob to string"));
-              }
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-      });
-
-  } catch (error: any) {
-      console.warn("Flux Generation Failed (falling back to Gemini):", error);
-      throw error;
-  }
-};
-
-// --- Gemini Image Gen Fallback ---
-const generateImageGemini = async (prompt: string): Promise<string> => {
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: prompt }] },
-    });
-    
-    for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData && part.inlineData.data) {
-            return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+        if (!response.ok) {
+            throw new Error(`Cloudflare Worker Error ${response.status}`);
         }
+
+        const blob = await response.blob();
+        
+        // VALIDATION: Ensure we actually got an image
+        if (blob.type.includes('application/json') || blob.type.includes('text')) {
+            const text = await blob.text();
+            throw new Error(`Worker returned invalid content: ${text.slice(0, 100)}`);
+        }
+
+        return await blobToBase64(blob);
+    } catch (e: any) {
+        console.error("Image generation failed:", e);
+        return getPlaceholderImage("Image Gen Failed");
     }
-    throw new Error("No image data found in Gemini response");
-  } catch (e) {
-      console.error("Gemini Image Gen Failed:", e);
-      throw e;
-  }
 };
 
-export const generateCharacterImage = async (description: string, age: number, style: string): Promise<string> => {
-  // Try Flux first
-  try {
-      const fluxPrompt = `A high-quality children's book character illustration. 
-      Character Description: ${description}.
-      Art Style: ${style}.
-      Context: Isolated character on a plain white background, full body, expressive, cute.`;
-      
-      return await queryFlux(fluxPrompt);
-  } catch (e) {
-      // Fallback to Gemini 2.5 Flash if Flux fails (e.g. CORS, no key, network)
-      const geminiPrompt = `Draw a children's book character. 
-      Description: ${description}. 
-      Style: ${style}. 
-      Keep it on a white background.`;
-      return await generateImageGemini(geminiPrompt);
-  }
+export const generateCharacterImage = async (name: string, description: string, style: string): Promise<string> => {
+  const prompt = `character design of ${name}, ${description}, ${style} style, white background high quality`;
+  return queryCloudflareWorker(prompt);
 };
 
 export const generateSceneImage = async (previousChapterContent: string, characterDescription: string, style: string): Promise<string> => {
-    // Truncate context to keep prompt concise
-    const context = previousChapterContent.length > 500 
-        ? previousChapterContent.slice(0, 500) + "..." 
+    // Truncate heavily to keep prompt clean
+    const context = previousChapterContent.length > 100 
+        ? previousChapterContent.slice(0, 100)
         : previousChapterContent;
-    const cleanContext = context.replace(/\s+/g, ' ').trim();
-
-    // Try Flux first
-    try {
-        const fluxPrompt = `Children's book illustration. 
-        Art Style: ${style}.
-        Scene Description: ${cleanContext}.
-        Main Character Details: ${characterDescription}.
-        Mood: Magical, storytelling, detailed, vibrant.`;
-
-        return await queryFlux(fluxPrompt);
-    } catch (e) {
-        // Fallback to Gemini 2.5 Flash
-        const geminiPrompt = `Create an illustration for a children's story.
-        Style: ${style}.
-        Scene: ${cleanContext}.
-        Include character matching: ${characterDescription}`;
-        return await generateImageGemini(geminiPrompt);
-    }
+    
+    const prompt = `story illustration ${context} ${style} ${characterDescription} magical detailed`;
+    return queryCloudflareWorker(prompt);
 }
 
 // --- Story Generation (Gemini 3 Pro) ---
