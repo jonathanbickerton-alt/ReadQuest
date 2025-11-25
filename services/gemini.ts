@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { ReadingStats, StoryChapter, StoryConfig } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -109,7 +109,55 @@ export const generateSceneImage = async (previousChapterContent: string, charact
     return queryCloudflareWorker(prompt);
 }
 
-// --- Story Generation (Gemini 3 Pro) ---
+// --- Robust Text Generation Helper with Fallback ---
+const generateTextWithFallback = async (
+  prompt: string, 
+  responseSchema: Schema,
+  onProgress?: (count: number) => void
+): Promise<string> => {
+  const tryGenerate = async (modelName: string) => {
+    const responseStream = await ai.models.generateContentStream({
+      model: modelName, 
+      contents: prompt,
+      config: {
+        maxOutputTokens: 8192,
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
+    });
+
+    let fullText = '';
+    for await (const chunk of responseStream) {
+      const chunkText = chunk.text;
+      if (chunkText) {
+          fullText += chunkText;
+          if (onProgress) {
+              onProgress(fullText.split(/\s+/).length);
+          }
+      }
+    }
+    return fullText;
+  };
+
+  try {
+    return await tryGenerate('gemini-3-pro-preview');
+  } catch (e) {
+    console.warn("Primary model failed, failing back to Flash:", e);
+    return await tryGenerate('gemini-2.5-flash');
+  }
+};
+
+const STORY_CHAPTER_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    content: { type: Type.STRING },
+    choices: { type: Type.ARRAY, items: { type: Type.STRING } }
+  },
+  required: ["title", "content", "choices"]
+};
+
+// --- Story Generation ---
 export const generateStoryStart = async (
     charName: string, 
     charDesc: string, 
@@ -130,34 +178,9 @@ export const generateStoryStart = async (
   - Ending: End the chapter with a clear cliffhanger or decision point.
   - Choices: Provide 3 distinct short options for what happens next.
   
-  Output JSON format:
-  {
-    "title": "Chapter Title",
-    "content": "Full story text here...",
-    "choices": ["Option 1", "Option 2", "Option 3"]
-  }`;
+  Return strictly valid JSON matching the schema.`;
 
-  const responseStream = await ai.models.generateContentStream({
-    model: 'gemini-3-pro-preview', 
-    contents: prompt,
-    config: {
-      maxOutputTokens: 8192,
-      responseMimeType: "application/json",
-    }
-  });
-
-  let fullText = '';
-  
-  for await (const chunk of responseStream) {
-    const chunkText = chunk.text;
-    if (chunkText) {
-        fullText += chunkText;
-        if (onProgress) {
-            onProgress(fullText.split(/\s+/).length);
-        }
-    }
-  }
-
+  const fullText = await generateTextWithFallback(prompt, STORY_CHAPTER_SCHEMA, onProgress);
   const data = cleanAndParseJSON(fullText);
 
   return {
@@ -187,7 +210,12 @@ export const generateNextChapter = async (
       narrativeInstruction = "Continue the adventure. Build character development and introduce new challenges.";
   }
 
-  const prompt = `Continue the story based on the previous context. The user chose: "${choice}".
+  // Limit context to save tokens and improve reliability
+  const trimmedContext = previousContext.length > 15000 ? "..." + previousContext.slice(-15000) : previousContext;
+
+  const prompt = `Previous story context: ${trimmedContext}
+  
+  User Choice: "${choice}"
   
   CONFIGURATION:
   - Target Audience Age: ${config.readingAge} years old.
@@ -204,40 +232,9 @@ export const generateNextChapter = async (
   - Consistency: Maintain the plot and character personality.
   ${isFinal ? '- Ending: This is the end. Do NOT provide choices.' : '- Ending: End with 3 new distinct options.'}
   
-  Output JSON format:
-  {
-    "title": "Chapter Title",
-    "content": "Full story text here...",
-    "choices": ${isFinal ? "[]" : `["Option 1", "Option 2", "Option 3"]`}
-  }`;
+  Return strictly valid JSON matching the schema.`;
 
-  // Limit context to save tokens, though Flash has a large context window, reducing payload helps latency.
-  const trimmedContext = previousContext.length > 20000 ? "..." + previousContext.slice(-20000) : previousContext;
-
-  const responseStream = await ai.models.generateContentStream({
-    model: 'gemini-3-pro-preview',
-    contents: [
-        { role: 'user', parts: [{ text: `Previous story context: ${trimmedContext}` }] },
-        { role: 'user', parts: [{ text: prompt }] }
-    ],
-    config: {
-      maxOutputTokens: 8192,
-      responseMimeType: "application/json",
-    }
-  });
-
-  let fullText = '';
-  
-  for await (const chunk of responseStream) {
-    const chunkText = chunk.text;
-    if (chunkText) {
-        fullText += chunkText;
-        if (onProgress) {
-            onProgress(fullText.split(/\s+/).length);
-        }
-    }
-  }
-
+  const fullText = await generateTextWithFallback(prompt, STORY_CHAPTER_SCHEMA, onProgress);
   const data = cleanAndParseJSON(fullText);
 
   return {
@@ -262,29 +259,38 @@ export const calculateReadingScore = async (originalText: string, transcribedTex
 
   Return JSON.`;
 
-  // Updated to use Gemini 3 Pro Preview for deeper analysis
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          accuracy: { type: Type.NUMBER },
-          pronunciation: { type: Type.NUMBER },
-          speed: { type: Type.NUMBER },
-          missedWords: { type: Type.ARRAY, items: { type: Type.STRING } }
+  try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              accuracy: { type: Type.NUMBER },
+              pronunciation: { type: Type.NUMBER },
+              speed: { type: Type.NUMBER },
+              missedWords: { type: Type.ARRAY, items: { type: Type.STRING } }
+            }
+          }
         }
-      }
-    }
-  });
-
-  const data = cleanAndParseJSON(response.text || "{}");
-  return {
-    accuracy: data.accuracy || 0,
-    pronunciation: data.pronunciation || 0,
-    speed: data.speed || 0,
-    missedWords: data.missedWords || []
-  };
+      });
+      const data = cleanAndParseJSON(response.text || "{}");
+      return {
+        accuracy: data.accuracy || 0,
+        pronunciation: data.pronunciation || 0,
+        speed: data.speed || 0,
+        missedWords: data.missedWords || []
+      };
+  } catch (e) {
+      console.error("Scoring failed:", e);
+      // Fallback fallback to basic calculation if AI fails
+      return {
+          accuracy: 0,
+          pronunciation: 0,
+          speed: Math.round((transcribedText.split(' ').length / durationSeconds) * 60) || 0,
+          missedWords: []
+      };
+  }
 };
