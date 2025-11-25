@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { AppSettings, Character, ReadingSession, StoryChapter, GameState, StoryConfig } from './types';
 import { generateCharacterImage, generateStoryStart, generateNextChapter, calculateReadingScore, generateSceneImage, getPlaceholderImage } from './services/gemini';
@@ -5,7 +6,7 @@ import { saveGameToDB, getSavedGamesFromDB, deleteSaveFromDB } from './services/
 import FocusReader from './components/FocusReader';
 import ParentDashboard from './components/ParentDashboard';
 import SettingsPanel from './components/SettingsPanel';
-import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette, Maximize2, RefreshCw } from 'lucide-react';
+import { Book, User, Settings as SettingsIcon, Layout, Wand2, Loader2, Play, AlertTriangle, Sparkles, Check, Edit2, Save, Trash2, ArrowRight, Search, Calendar, Clock, ChevronLeft, X, Baby, Ruler, Layers, Palette, Maximize2, RefreshCw, Smile, Frown, Meh, Compass } from 'lucide-react';
 
 const VISUAL_STYLES = [
   { id: 'cartoon', label: 'Vibrant Cartoon', value: 'colorful, vibrant, fun cartoon style', icon: '🎨' },
@@ -14,6 +15,16 @@ const VISUAL_STYLES = [
   { id: 'vintage', label: '1930s B&W', value: '1930s rubber hose animation style, black and white, vintage cartoon', icon: '📽️' },
   { id: 'watercolor', label: 'Watercolor', value: 'soft watercolor painting, artistic, storybook illustration', icon: '🖌️' },
   { id: 'comic', label: 'Comic Book', value: 'comic book style, bold lines, vibrant colors', icon: '💥' },
+];
+
+const GENRES = [
+  { id: 'fantasy', label: 'Fantasy', description: 'Magic, wizards, imaginary worlds', icon: '🧙‍♂️' },
+  { id: 'realistic', label: 'Realistic', description: 'Real life, school, friends', icon: '🎒' },
+  { id: 'historical', label: 'Historical', description: 'Past times, real events', icon: '📜' },
+  { id: 'mystery', label: 'Mystery', description: 'Puzzles, detectives, secrets', icon: '🕵️‍♀️' },
+  { id: 'scifi', label: 'Sci-Fi', description: 'Space, aliens, future tech', icon: '🚀' },
+  { id: 'adventure', label: 'Adventure', description: 'Danger, survival, journeys', icon: '🗺️' },
+  { id: 'traditional', label: 'Traditional', description: 'Myths, fables, fairy tales', icon: '🐉' },
 ];
 
 export default function App() {
@@ -34,7 +45,9 @@ export default function App() {
       readingAge: 8,
       targetWordCount: 500,
       totalChapters: 10,
-      visualStyle: VISUAL_STYLES[0].value
+      visualStyle: VISUAL_STYLES[0].value,
+      genre: GENRES[5].label, // Default to Adventure
+      humorLevel: 'neutral'
   });
   
   // Creation Flow State
@@ -103,7 +116,14 @@ export default function App() {
                              ...single,
                              id: id,
                              lastSaved: single.lastSaved || new Date().toISOString(),
-                             storyConfig: single.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10, visualStyle: VISUAL_STYLES[0].value }
+                             storyConfig: single.storyConfig || { 
+                                readingAge: 8, 
+                                targetWordCount: 500, 
+                                totalChapters: 10, 
+                                visualStyle: VISUAL_STYLES[0].value,
+                                genre: 'Adventure',
+                                humorLevel: 'neutral'
+                             }
                          };
                          await saveGameToDB(migrated);
                          migratedCount++;
@@ -235,8 +255,15 @@ export default function App() {
         setCurrentChapterIndex(game.currentChapterIndex);
         setReadingHistory(game.readingHistory);
         setGeneratedWordCount(game.generatedWordCount);
-        // Ensure visualStyle exists if loading old save
-        setStoryConfig(game.storyConfig || { readingAge: 8, targetWordCount: 500, totalChapters: 10, visualStyle: VISUAL_STYLES[0].value });
+        // Ensure properties exist if loading old save
+        setStoryConfig(game.storyConfig || { 
+          readingAge: 8, 
+          targetWordCount: 500, 
+          totalChapters: 10, 
+          visualStyle: VISUAL_STYLES[0].value,
+          genre: 'Adventure',
+          humorLevel: 'neutral'
+        });
         setCurrentGameId(game.id);
         
         setView('reading');
@@ -381,32 +408,10 @@ export default function App() {
       };
       
       setReadingHistory(prev => [...prev, newSession]);
-      // We must save after state updates. 
-      // NOTE: React state updates are batched/async. 
-      // For simplicity/robustness here, we'll manually merge the new session into the save call.
-      // But handleSaveGame uses the state 'readingHistory'. 
-      // To be safe, we will call save in a useEffect or assume the user clicks save, 
-      // OR we can pass the new history directly.
-      // Let's rely on the user clicking save OR we can trigger it. 
-      // Better approach: Update the state, then in a useEffect for readingHistory, trigger save?
-      // No, that causes too many saves.
-      // Let's modify handleSaveGame to be callable with overrides, OR just accept that for this auto-save
-      // we might miss the very last split second update if not careful.
-      // Actually, let's just wait a tick or use the updated value directly.
-      
-      // Better: Construct the new full history and pass it to a helper that saves.
-      // But handleSaveGame pulls from state.
-      // Let's update state, then call save. 
-      // Given the complexity of React batching, we will do a manual save logic here for the auto-save.
       
       const updatedHistory = [...readingHistory, newSession];
       
-      // Trigger save with the updated data
-      // We can't easily call handleSaveGame because it reads stale state closure.
-      // We will duplicate the save logic slightly for this auto-event or use a ref.
-      // Refactoring handleSaveGame to accept args is best.
-      
-      // Let's do this:
+      // Auto save
       const saveId = currentGameId || Date.now().toString();
       const timestamp = new Date().toISOString();
       const gameState: GameState = {
@@ -632,6 +637,71 @@ export default function App() {
                     </div>
                 </div>
 
+                {/* Genre Selection */}
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+                    <Compass className="w-4 h-4" /> Genre
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {GENRES.map((g) => (
+                      <button
+                        key={g.id}
+                        onClick={() => setStoryConfig(prev => ({...prev, genre: g.label}))}
+                        className={`p-2 rounded-lg text-left border-2 transition-all flex flex-col
+                          ${storyConfig.genre === g.label 
+                            ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500' 
+                            : 'border-gray-100 hover:border-indigo-200 bg-white'
+                          }`}
+                      >
+                         <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xl">{g.icon}</span>
+                            <span className={`text-sm font-bold ${storyConfig.genre === g.label ? 'text-indigo-800' : 'text-gray-700'}`}>{g.label}</span>
+                         </div>
+                         <span className="text-[10px] text-gray-500 leading-tight">{g.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Humor Toggle */}
+                <div>
+                   <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+                      <Smile className="w-4 h-4" /> Humor & Tone
+                   </label>
+                   <div className="flex bg-gray-100 p-1 rounded-xl">
+                      <button
+                        onClick={() => setStoryConfig(prev => ({...prev, humorLevel: 'funny'}))}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-bold transition-all ${
+                           storyConfig.humorLevel === 'funny' 
+                           ? 'bg-white text-indigo-700 shadow-sm' 
+                           : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                         <span className="text-lg">😂</span> Funny
+                      </button>
+                      <button
+                        onClick={() => setStoryConfig(prev => ({...prev, humorLevel: 'neutral'}))}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-bold transition-all ${
+                           storyConfig.humorLevel === 'neutral' 
+                           ? 'bg-white text-indigo-700 shadow-sm' 
+                           : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                         <span className="text-lg">🤷</span> Don't Mind
+                      </button>
+                      <button
+                        onClick={() => setStoryConfig(prev => ({...prev, humorLevel: 'serious'}))}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-bold transition-all ${
+                           storyConfig.humorLevel === 'serious' 
+                           ? 'bg-white text-indigo-700 shadow-sm' 
+                           : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                         <span className="text-lg">😐</span> Serious
+                      </button>
+                   </div>
+                </div>
+
                 {/* Character Name */}
                 <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">Character Name</label>
@@ -782,6 +852,11 @@ export default function App() {
                                      <div className="flex items-center justify-between text-xs text-gray-400">
                                         <div className="flex items-center gap-3">
                                             <span className="flex items-center gap-1"><Calendar className="w-3 h-3"/> {new Date(game.lastSaved).toLocaleDateString()}</span>
+                                            {game.storyConfig?.genre && (
+                                               <span className="px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[10px] font-bold border border-indigo-100">
+                                                 {game.storyConfig.genre}
+                                               </span>
+                                            )}
                                         </div>
                                         <button 
                                             onClick={(e) => handleDeleteSave(e, game.id)}

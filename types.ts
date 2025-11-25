@@ -40,6 +40,8 @@ export interface StoryConfig {
   targetWordCount: number;
   totalChapters: number;
   visualStyle: string;
+  genre: string;
+  humorLevel: 'funny' | 'serious' | 'neutral';
 }
 
 export interface GameState {

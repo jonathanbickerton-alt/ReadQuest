@@ -164,16 +164,25 @@ export const generateStoryStart = async (
     config: StoryConfig, 
     onProgress?: (count: number) => void
 ): Promise<StoryChapter> => {
-  const prompt = `Write the first chapter of a children's adventure story about a hero named ${charName} who is ${charDesc}. 
+  
+  const toneInstruction = config.humorLevel === 'funny' 
+    ? "Humorous, witty, and silly. Make the child laugh." 
+    : config.humorLevel === 'serious' 
+        ? "Serious, dramatic, and earnest. Focus on the gravity of the situation." 
+        : "Balanced adventure tone. Engaging and fun.";
+
+  const prompt = `Write the first chapter of a children's ${config.genre} story about a hero named ${charName} who is ${charDesc}. 
   
   CONFIGURATION:
+  - Genre: ${config.genre}
+  - Tone Preference: ${toneInstruction}
   - Target Audience Age: ${config.readingAge} years old.
   - Vocabulary Difficulty: ${config.readingAge < 7 ? "Very Simple (Dolch sight words, short sentences)" : config.readingAge < 10 ? "Simple (Common words, moderate sentences)" : "Moderate (Some challenging words allowed)"}.
   - Chapter Length: Approximately ${config.targetWordCount} words.
   - Total Book Length: ${config.totalChapters} chapters.
   
   REQUIREMENTS:
-  - Tone: Engaging, fun, and age-appropriate.
+  - Tone: ${toneInstruction}
   - Structure: Use proper paragraphs, dialogue, and correct punctuation.
   - Ending: End the chapter with a clear cliffhanger or decision point.
   - Choices: Provide 3 distinct short options for what happens next.
@@ -201,6 +210,12 @@ export const generateNextChapter = async (
   const isPenultimate = currentChapterIndex === config.totalChapters - 2; 
   const isFinal = currentChapterIndex === config.totalChapters - 1; 
 
+  const toneInstruction = config.humorLevel === 'funny' 
+    ? "Keep it funny and lighthearted." 
+    : config.humorLevel === 'serious' 
+        ? "Keep it serious and dramatic." 
+        : "Maintain the established adventure tone.";
+
   let narrativeInstruction = "";
   if (isPenultimate) {
       narrativeInstruction = "IMPORTANT: This is the PENULTIMATE chapter. Build up to a major event or climax! Do not resolve the story yet, but set the stage for the big finale.";
@@ -218,6 +233,8 @@ export const generateNextChapter = async (
   User Choice: "${choice}"
   
   CONFIGURATION:
+  - Genre: ${config.genre}
+  - Tone: ${toneInstruction}
   - Target Audience Age: ${config.readingAge} years old.
   - Vocabulary: ${config.readingAge < 7 ? "Very Simple" : "Age Appropriate"}.
   - Target Length: ${config.targetWordCount} words.
