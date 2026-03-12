@@ -61,43 +61,43 @@ export const getPlaceholderImage = (text: string, bgColor: string = "#e0e7ff", t
 };
 
 
-// --- Cloudflare Worker Image Generation Service ---
+// --- Gemini Image Generation Service ---
 
-const queryCloudflareWorker = async (prompt: string): Promise<string> => {
+const generateGeminiImage = async (prompt: string): Promise<string> => {
     try {
-        console.log("Generating image with prompt:", prompt);
-        const response = await fetch(
-            `https://readquestimagen.jonathan-bickerton.workers.dev/?prompt=${encodeURIComponent(prompt)}`
-        );
-
-        if (!response.ok) {
-            throw new Error(`Cloudflare Worker Error ${response.status}`);
-        }
-
-        const blob = await response.blob();
+        console.log("Generating image with Gemini 2.5 Flash Image, prompt:", prompt);
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [
+                    { text: prompt }
+                ]
+            }
+        });
         
-        // VALIDATION: Ensure we actually got an image
-        if (blob.type.includes('application/json') || blob.type.includes('text')) {
-            const text = await blob.text();
-            throw new Error(`Worker returned invalid content: ${text.slice(0, 100)}`);
+        if (response.candidates && response.candidates.length > 0) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) {
+                    const base64EncodeString = part.inlineData.data;
+                    return `data:image/png;base64,${base64EncodeString}`;
+                }
+            }
         }
-
-        return await blobToBase64(blob);
+        throw new Error("No image data returned from Gemini");
     } catch (e: any) {
-        console.error("Image generation failed:", e);
+        console.error("Gemini Image generation failed:", e);
         return getPlaceholderImage("Image Gen Failed");
     }
 };
 
 export const generateCharacterImage = async (name: string, description: string, style: string): Promise<string> => {
-  // Flux.1 Schnell Prompt Engineering:
   // Uses natural language structures. Style first, then Subject, then Details.
   const prompt = `Create a character design in the style of: ${style}. Character Name: ${name}. Description: ${description}. Setting: Isolated on a pure white background. View: Full body. Quality: Masterpiece, high resolution, sharp focus.`;
-  return queryCloudflareWorker(prompt);
+  return generateGeminiImage(prompt);
 };
 
 export const generateSceneImage = async (previousChapterContent: string, characterDescription: string, style: string): Promise<string> => {
-    // Flux handles longer context well. Clean newlines to save tokens/url length but keep flow.
+    // Clean newlines to save tokens/url length but keep flow.
     const cleanContext = previousChapterContent.replace(/\s+/g, ' ');
     
     // Increase context window to 350 chars for better narrative understanding
@@ -106,7 +106,7 @@ export const generateSceneImage = async (previousChapterContent: string, charact
         : cleanContext;
     
     const prompt = `Create a story illustration in the style of: ${style}. Scene Description: ${context}. The main character is present, looking like: ${characterDescription}. Quality: Cinematic lighting, detailed background, dynamic composition, 8k resolution.`;
-    return queryCloudflareWorker(prompt);
+    return generateGeminiImage(prompt);
 }
 
 // --- Robust Text Generation Helper with Fallback ---
