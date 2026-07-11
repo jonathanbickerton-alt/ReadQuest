@@ -1,4 +1,4 @@
-## ReadQuest — 
+## ReadQuest
 ReadQuest > A reading companion designed from the ground up for children with dyslexia and > dysgraphia — making reading practice accessible, low-pressure and genuinely fun. 🔗 
 
 **Live demo:** https://read-quest-omega.vercel.app/ 
@@ -6,7 +6,7 @@ ReadQuest > A reading companion designed from the ground up for children with dy
 ## Overview 
 ReadQuest is a reading-support app built around the needs of neurodivergent readers. Where most tools treat accessibility as an afterthought, ReadQuest starts there — readable typography, generous spacing, audio support and bite-sized challenges that reward progress instead of penalising mistakes. I built it for my son, who has dyslexia and dysgraphia, to prove that thoughtfully applied AI can make reading feel like a quest rather than a chore. 
 
-## Features - 
+## Features
 🔤 **Dyslexia-friendly design** — [OpenDyslexic / high-legibility font], adjustable text size and spacing, low-glare colour themes
 🔊 **Text-to-speech** so words can be heard as well as read
 🧩 **Phonics-based challenges** broken into short, achievable steps
