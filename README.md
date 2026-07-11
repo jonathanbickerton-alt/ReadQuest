@@ -19,7 +19,8 @@ ReadQuest is a reading-support app built around the needs of neurodivergent read
 [Web Speech API / provider] for text-to-speech - Deployed on Vercel 
 
 ## Getting started 
-'''bash git clone https://github.com/jonathanbickerton-alt/ReadQuest.git 
+'''bash 
+git clone https://github.com/jonathanbickerton-alt/ReadQuest.git 
 cd ReadQuest 
 npm install 
 npm run dev
