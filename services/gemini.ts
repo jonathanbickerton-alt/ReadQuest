@@ -1,7 +1,18 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { ReadingStats, StoryChapter, StoryConfig } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let aiInstance: GoogleGenAI | null = null;
+
+const getGenAIClient = (): GoogleGenAI => {
+  if (!aiInstance) {
+    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn("GEMINI_API_KEY is not defined in the environment. Gemini API calls will fail. Please add GEMINI_API_KEY to your environment variables (e.g., in Vercel settings).");
+    }
+    aiInstance = new GoogleGenAI({ apiKey: apiKey || "" });
+  }
+  return aiInstance;
+};
 
 // --- Helper for Robust JSON Parsing ---
 const cleanAndParseJSON = (text: string): any => {
@@ -61,39 +72,72 @@ export const getPlaceholderImage = (text: string, bgColor: string = "#e0e7ff", t
 };
 
 
-// --- Gemini Image Generation Service ---
+// --- Cloudflare Worker & Gemini Image Generation Services ---
+
+const queryCloudflareWorker = async (prompt: string): Promise<string> => {
+    try {
+        console.log("Generating image with Cloudflare Worker:", prompt);
+        const response = await fetch(
+            `https://readquestimagen.jonathan-bickerton.workers.dev/?prompt=${encodeURIComponent(prompt)}`
+        );
+
+        if (!response.ok) {
+            throw new Error(`Cloudflare Worker Error ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        
+        // VALIDATION: Ensure we actually got an image
+        if (blob.type.includes('application/json') || blob.type.includes('text')) {
+            const text = await blob.text();
+            throw new Error(`Worker returned invalid content: ${text.slice(0, 100)}`);
+        }
+
+        return await blobToBase64(blob);
+    } catch (e: any) {
+        console.error("Cloudflare Worker Image generation failed:", e);
+        throw e; // Rethrow to let caller fall back
+    }
+};
 
 const generateGeminiImage = async (prompt: string): Promise<string> => {
     try {
-        console.log("Generating image with Gemini 2.5 Flash Image, prompt:", prompt);
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: {
-                parts: [
-                    { text: prompt }
-                ]
+        console.log("Generating image with Gemini Imagen 3, prompt:", prompt);
+        const response = await getGenAIClient().models.generateImages({
+            model: 'imagen-3.0-generate-002',
+            prompt: prompt,
+            config: {
+                numberOfImages: 1,
+                outputMimeType: 'image/jpeg',
+                aspectRatio: '1:1',
             }
         });
         
-        if (response.candidates && response.candidates.length > 0) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.inlineData) {
-                    const base64EncodeString = part.inlineData.data;
-                    return `data:image/png;base64,${base64EncodeString}`;
-                }
-            }
+        if (response && response.generatedImages && response.generatedImages.length > 0) {
+            const imageBytes = response.generatedImages[0].image.imageBytes;
+            return `data:image/jpeg;base64,${imageBytes}`;
         }
-        throw new Error("No image data returned from Gemini");
+        throw new Error("No image data returned from Gemini Imagen 3");
     } catch (e: any) {
-        console.error("Gemini Image generation failed:", e);
-        return getPlaceholderImage("Image Gen Failed");
+        console.error("Gemini Imagen 3 generation failed:", e);
+        throw e; // Rethrow to allow fallback to Cloudflare Flux
     }
 };
 
 export const generateCharacterImage = async (name: string, description: string, style: string): Promise<string> => {
   // Uses natural language structures. Style first, then Subject, then Details.
   const prompt = `Create a character design in the style of: ${style}. Character Name: ${name}. Description: ${description}. Setting: Isolated on a pure white background. View: Full body. Quality: Masterpiece, high resolution, sharp focus.`;
-  return generateGeminiImage(prompt);
+  try {
+    return await generateGeminiImage(prompt);
+  } catch (e) {
+    console.warn("Gemini Imagen 3 failed, falling back to Cloudflare Flux worker:", e);
+    try {
+      return await queryCloudflareWorker(prompt);
+    } catch (workerErr) {
+      console.error("Both Gemini Imagen 3 and Cloudflare image generation failed:", workerErr);
+      return getPlaceholderImage("Image Gen Failed");
+    }
+  }
 };
 
 export const generateSceneImage = async (previousChapterContent: string, characterDescription: string, style: string): Promise<string> => {
@@ -106,7 +150,17 @@ export const generateSceneImage = async (previousChapterContent: string, charact
         : cleanContext;
     
     const prompt = `Create a story illustration in the style of: ${style}. Scene Description: ${context}. The main character is present, looking like: ${characterDescription}. Quality: Cinematic lighting, detailed background, dynamic composition, 8k resolution.`;
-    return generateGeminiImage(prompt);
+    try {
+        return await generateGeminiImage(prompt);
+    } catch (e) {
+        console.warn("Gemini Imagen 3 failed, falling back to Cloudflare Flux worker:", e);
+        try {
+            return await queryCloudflareWorker(prompt);
+        } catch (workerErr) {
+            console.error("Both Gemini Imagen 3 and Cloudflare image generation failed:", workerErr);
+            return getPlaceholderImage("Image Gen Failed");
+        }
+    }
 }
 
 // --- Robust Text Generation Helper with Fallback ---
@@ -116,7 +170,7 @@ const generateTextWithFallback = async (
   onProgress?: (count: number) => void
 ): Promise<string> => {
   const tryGenerate = async (modelName: string) => {
-    const responseStream = await ai.models.generateContentStream({
+    const responseStream = await getGenAIClient().models.generateContentStream({
       model: modelName, 
       contents: prompt,
       config: {
@@ -267,17 +321,17 @@ export const calculateReadingScore = async (originalText: string, transcribedTex
   Original Text: "${originalText.substring(0, 1000)}..." (truncated)
   Child's Transcription: "${transcribedText}"
   Duration: ${durationSeconds} seconds.
-
+ 
   Analyze the reading. 
   1. Calculate accuracy (percentage of words read correctly).
   2. Estimate pronunciation quality (0-100) based on how close the transcript is to the text.
   3. Identify missed or mispronounced words. Return them as a list of strings.
   4. Calculate speed (Words Per Minute).
-
+ 
   Return JSON.`;
-
+ 
   try {
-      const response = await ai.models.generateContent({
+      const response = await getGenAIClient().models.generateContent({
         model: 'gemini-3-pro-preview',
         contents: prompt,
         config: {
